@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>demo_arm</name>
+  <version>0.1.0</version>
+  <description>Demo arm for URDF Studio</description>
+  <maintainer email="dev@example.com">urdf-studio</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+</package>

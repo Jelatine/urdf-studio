@@ -1,0 +1,35 @@
+{
+  "name": "urdf-studio",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "URDF editor with Blender-style mesh editing (Rust + Tauri + Three.js)",
+  "license": "MIT",
+  "scripts": {
+    "build:wasm": "wasm-pack build crates/mesh-wasm --target web --out-dir ../../src/wasm/pkg --release",
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "examples": "node scripts/make-examples.mjs"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.12.4",
+    "@tauri-apps/plugin-dialog": "^2.8.3",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "three": "^0.186.1",
+    "three-mesh-bvh": "^0.9.16",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/three": "^0.186.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "typescript": "~5.9.3",
+    "vite": "^8.3.5"
+  }
+}

@@ -1,0 +1,24 @@
+[package]
+name = "urdf-studio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "URDF editor with Blender-style mesh editing"
+
+[lib]
+name = "urdf_studio_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde.workspace = true
+serde_json.workspace = true
+project-core = { path = "../crates/project-core" }
+urdf-core = { path = "../crates/urdf-core" }
+
+[dev-dependencies]
+tempfile = "3"

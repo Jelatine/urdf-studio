@@ -1,0 +1,11 @@
+[package]
+name = "project-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "URDF project packaging: zip/folder loading, saving and mesh path resolution"
+
+[dependencies]
+zip.workspace = true
+thiserror.workspace = true
+serde.workspace = true
