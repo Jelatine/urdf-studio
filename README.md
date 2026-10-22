@@ -29,7 +29,7 @@ A desktop URDF editor built with **Rust + Tauri**, with Blender-style mesh editi
   - **Add primitives** (Shift+A): cube, plane, grid, circle, cylinder, cone and UV sphere, placed at the 3D cursor (Shift+right-click).
   - **Workflow**: every operation can be undone/redone, in one history shared by URDF and mesh edits (Ctrl+Z works across object and edit mode; e.g. a separate into a new link undoes as one step). An **adjust last operation** panel re-runs the last command with new parameters, and F3 opens operator search.
   - Box, cylinder and sphere geometry can be converted into editable meshes.
-  - **Fit primitives** (Shift+Alt+F): fit a box, cylinder or sphere to the selection (edit mode) or a whole mesh (object mode / Inspector "拟合"), enclosing all vertices or least-squares, optionally per connected part. Results are previewed in the viewport and added as URDF collision (or visual) geometry, or replace the selection inside the mesh (adjustable afterwards: shape, segments, keep original…).
+  - **Fit primitives** (Shift+Alt+F): fit a box, cylinder or sphere to the selection (edit mode) or a whole mesh (object mode / Inspector "拟合"), enclosing all vertices or least-squares, optionally per connected part; the scope can be switched between the selection and the whole mesh. Results are previewed in the viewport and added as URDF collision (or visual) geometry, replace the fitted visual/collision itself (for a selection: the part is cut from the mesh and becomes a primitive item), or replace the selection inside the mesh (adjustable afterwards: shape, segments, keep original…).
 
 Press **F1** in the app for the full shortcut list.
 

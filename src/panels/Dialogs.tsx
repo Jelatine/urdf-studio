@@ -3,7 +3,8 @@ import { FIT_AXES, FIT_MODES, FIT_SHAPES, fitReplaceInMesh, separateSelection } 
 import { operators, runOp } from "../edit/operators";
 import { applyFit, computeFit, type FitOutput, type FittedShape } from "../state/actions";
 import { useStore, type ConfirmRequest, type FitTarget } from "../state/store";
-import { writeUrdf, type FitOptions } from "../wasm";
+import { getMesh } from "../mesh/registry";
+import { writeUrdf, type FitOptions, type MeshStats } from "../wasm";
 import { Check, NumField, Row, Select } from "./widgets";
 
 /** `floating` keeps the viewport visible and usable behind the dialog. */
@@ -175,22 +176,28 @@ function FitDialog({ target }: { target: FitTarget }) {
   const [params, setParams] = useState(lastFit.params);
   const [output, setOutput] = useState(lastFit.output);
   const [segments, setSegments] = useState(lastFit.segments);
+  const [all, setAll] = useState(target.all);
+  const scoped = useMemo(() => ({ ...target, all }), [target, all]);
+  // Re-evaluated on every meshVersion change (subscribed above).
+  const hasSelection = ((getMesh(target.meshPath)?.editor.stats() as MeshStats | undefined)?.selVerts ?? 0) > 0;
   const editTarget = useStore((s) => (s.mode === "edit" ? s.editTarget : null));
   // In-mesh replacement only applies to the selection of the mesh being edited.
   const canReplaceMesh =
-    !target.all && editTarget?.link === target.link && editTarget.role === target.role && editTarget.index === target.index;
-  const out: FitOutput = output === "replace_mesh" && !canReplaceMesh ? "add_collision" : output;
+    !all && editTarget?.link === target.link && editTarget.role === target.role && editTarget.index === target.index;
+  let out: FitOutput = output;
+  if (out === "replace_mesh" && !canReplaceMesh) out = "add_collision";
+  if (out === "replace_collision" && target.role === "collision") out = "replace_source";
   const set = (p: Partial<FitParams>) => setParams((x) => ({ ...x, ...p }));
   const fit = useMemo((): { shapes: FittedShape[]; error?: string } => {
     try {
-      return { shapes: computeFit(target, params) };
+      return { shapes: computeFit(scoped, params) };
     } catch (e) {
       const m = e instanceof Error ? e.message : String(e);
       return { shapes: [], error: FIT_ERRORS[m] ?? m };
     }
     // meshVersion: refit when the selection changes while the dialog is open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target, params, meshVersion, robot]);
+  }, [scoped, params, meshVersion, robot]);
   useEffect(() => {
     useStore.setState({ fitPreview: fit.shapes.length ? { link: target.link, items: fit.shapes } : null });
   }, [fit, target.link]);
@@ -202,7 +209,7 @@ function FitDialog({ target }: { target: FitTarget }) {
     if (!fit.shapes.length) return;
     useStore.setState({ dialog: null });
     if (out === "replace_mesh") fitReplaceInMesh(params, segments);
-    else applyFit(target, fit.shapes, out);
+    else applyFit(scoped, fit.shapes, out);
   };
   const applyRef = useRef(apply);
   applyRef.current = apply;
@@ -217,12 +224,23 @@ function FitDialog({ target }: { target: FitTarget }) {
   }, []);
   const showCyl = params.shape === "auto" || params.shape === "cylinder";
   const showBox = params.shape === "auto" || params.shape === "box";
-  const replaceLabel = target.role === "collision" ? `替换碰撞体 #${target.index}` : "替换该 link 的全部碰撞体";
+  const kind = target.role === "visual" ? "外观" : "碰撞体";
+  const sourceLabel = all ? `替换被拟合的${kind} #${target.index}` : `替换被拟合部分为新${kind}`;
   return (
     <Modal title="拟合基本形状" floating>
       <div className="fit-source dim">
-        {target.link} · {target.role === "visual" ? "外观" : "碰撞"} #{target.index} · {target.all ? "整个网格" : "选中部分"}
+        {target.link} · {kind} #{target.index}
       </div>
+      <Row label="范围" title="拟合网格的全部顶点，或当前选中的部分 (编辑模式下的选区)">
+        <Select
+          value={all ? "all" : "selection"}
+          onChange={(v) => setAll(v === "all")}
+          options={[
+            { value: "all", label: "整个网格" },
+            ...(hasSelection || !all ? [{ value: "selection" as const, label: "选中部分" }] : []),
+          ]}
+        />
+      </Row>
       <Row label="形状">
         <Select
           value={params.shape}
@@ -260,8 +278,9 @@ function FitDialog({ target }: { target: FitTarget }) {
           onChange={setOutput}
           options={[
             { value: "add_collision", label: "添加为新的碰撞体" },
-            { value: "replace_collision", label: replaceLabel },
+            ...(target.role === "visual" ? [{ value: "replace_collision" as const, label: "替换该 link 的全部碰撞体" }] : []),
             { value: "add_visual", label: "添加为外观" },
+            { value: "replace_source", label: sourceLabel },
             ...(canReplaceMesh ? [{ value: "replace_mesh" as const, label: "在网格内替换选中部分" }] : []),
           ]}
         />

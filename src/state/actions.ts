@@ -15,7 +15,7 @@ import {
   type Robot,
 } from "../types/urdf";
 import { MeshEditor, parseUrdf, resolveMesh, validateUrdf, writeUrdf, type FitOptions, type FitResult } from "../wasm";
-import { redoStep, undoStep, type HistoryStep } from "./history";
+import { redoStep, undoGroup, undoStep, type HistoryStep } from "./history";
 import { store, type ConfirmRequest, type EditTarget, type FitTarget, type ProjectInfo } from "./store";
 
 const s = () => store.getState();
@@ -503,10 +503,13 @@ export interface FittedShape {
 }
 
 /**
- * "replace_collision" replaces the target collision, or all of the link's collisions when fitting a visual.
- * "replace_mesh" replaces the selection inside the edited mesh (handled by `fitReplaceInMesh`).
+ * "replace_collision": replaces all of the link's collisions (fitting a visual).
+ * "replace_source": replaces what was fitted — the whole visual/collision item,
+ *   or, for a selection, removes the selected part from the mesh and adds the
+ *   shapes next to the item.
+ * "replace_mesh": replaces the selection inside the edited mesh (`fitReplaceInMesh`).
  */
-export type FitOutput = "add_collision" | "replace_collision" | "add_visual" | "replace_mesh";
+export type FitOutput = "add_collision" | "replace_collision" | "add_visual" | "replace_source" | "replace_mesh";
 
 const r6 = (v: number) => Math.round(v * 1e6) / 1e6 || 0;
 
@@ -565,25 +568,43 @@ export function computeFit(t: FitTarget, opts: Omit<FitOptions, "all" | "scale">
 
 export function applyFit(t: FitTarget, shapes: FittedShape[], output: Exclude<FitOutput, "replace_mesh">) {
   if (!shapes.length) return;
-  // Replacing the collision being edited invalidates the edit target.
   const st = s();
-  if (output === "replace_collision" && st.mode === "edit" && st.editTarget?.link === t.link && st.editTarget.role === "collision") exitEditMode();
-  const name = (i: number) => (shapes.length > 1 ? `fit_${i}` : null);
-  editRobot((r) => {
-    const l = r.links.find((x) => x.name === t.link)!;
-    if (output === "add_visual") {
-      const material = t.role === "visual" ? structuredClone(l.visuals[t.index]?.material ?? null) : null;
-      l.visuals.push(...shapes.map((sh, i) => ({ name: name(i), origin: sh.origin, geometry: sh.geometry, material })));
-      return;
+  const editing = st.mode === "edit" && st.editTarget?.link === t.link && st.editTarget.role === t.role && st.editTarget.index === t.index;
+  const entry = getMesh(t.meshPath);
+  // A selection fit removes the fitted part from the mesh; the item itself
+  // goes away when nothing of the mesh remains.
+  const cut = output === "replace_source" && !t.all && !!entry;
+  let removeItem = output === "replace_source" && t.all;
+  if (cut && entry.editor.stats().verts === entry.editor.stats().selVerts) removeItem = true;
+  if ((removeItem && editing) || (output === "replace_collision" && st.mode === "edit" && st.editTarget?.link === t.link && st.editTarget.role === "collision")) {
+    exitEditMode();
+  }
+  undoGroup(() => {
+    if (cut && !removeItem) {
+      entry.editor.run({ op: "delete", kind: entry.editor.stats().selFaces ? "faces" : "verts" });
+      store.setState((x) => ({ meshVersion: x.meshVersion + 1, meshStats: editing ? entry.editor.stats() : x.meshStats }));
     }
-    const cols = shapes.map((sh, i) => ({ name: name(i), origin: sh.origin, geometry: sh.geometry }));
-    if (output === "add_collision") l.collisions.push(...cols);
-    else if (t.role === "collision") l.collisions.splice(t.index, 1, ...cols);
-    else l.collisions = cols;
+    editRobot((r) => {
+      const l = r.links.find((x) => x.name === t.link)!;
+      const src = t.role === "visual" ? l.visuals[t.index] : l.collisions[t.index];
+      const single = shapes.length === 1 && removeItem;
+      const name = (i: number) => (single ? src?.name ?? null : shapes.length > 1 ? `fit_${i}` : null);
+      const material = t.role === "visual" ? structuredClone(l.visuals[t.index]?.material ?? null) : null;
+      const visuals = shapes.map((sh, i) => ({ name: name(i), origin: sh.origin, geometry: sh.geometry, material }));
+      const cols = shapes.map((sh, i) => ({ name: name(i), origin: sh.origin, geometry: sh.geometry }));
+      if (output === "add_visual") l.visuals.push(...visuals);
+      else if (output === "add_collision") l.collisions.push(...cols);
+      else if (output === "replace_collision") l.collisions = cols;
+      // New shapes go after the source item so its index (the edit target) stays valid.
+      else if (t.role === "visual") l.visuals.splice(removeItem ? t.index : t.index + 1, removeItem ? 1 : 0, ...visuals);
+      else l.collisions.splice(removeItem ? t.index : t.index + 1, removeItem ? 1 : 0, ...cols);
+    });
   });
-  if (output !== "add_visual") store.setState({ showCollision: true });
-  const what = output === "add_visual" ? "外观" : "碰撞体";
-  s().setStatus(`已${output === "replace_collision" ? "替换为" : "添加"} ${shapes.length} 个${what}${s().mode === "edit" ? "（对象模式下 Ctrl+Z 撤销）" : ""}`, "ok");
+  const toCollision = output === "add_collision" || output === "replace_collision" || (output === "replace_source" && t.role === "collision");
+  if (toCollision) store.setState({ showCollision: true });
+  const what = toCollision ? "碰撞体" : "外观";
+  const verb = output === "add_collision" || output === "add_visual" ? "添加" : "替换为";
+  s().setStatus(`已${verb} ${shapes.length} 个${what}${cut && !removeItem ? "（已从网格中移除被拟合部分）" : ""}`, "ok");
 }
 
 // --------------------------------------------------------------- edit mode
