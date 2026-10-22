@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/mesh-core", "crates/urdf-core", "crates/project-core", "crates/mesh-wasm", "src-tauri"]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license = "MIT"
 

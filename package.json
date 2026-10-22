@@ -1,7 +1,7 @@
 {
   "name": "urdf-studio",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "description": "URDF editor with Blender-style mesh editing (Rust + Tauri + Three.js)",
   "license": "MIT",
