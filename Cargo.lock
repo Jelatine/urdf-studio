@@ -1808,7 +1808,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "glam",
  "serde",
@@ -1818,7 +1818,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-wasm"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "console_error_panic_hook",
  "glam",
@@ -2416,7 +2416,7 @@ dependencies = [
 
 [[package]]
 name = "project-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
@@ -3785,7 +3785,7 @@ checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
 
 [[package]]
 name = "urdf-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "roxmltree",
  "serde",
@@ -3795,7 +3795,7 @@ dependencies = [
 
 [[package]]
 name = "urdf-studio"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "project-core",
  "serde",
