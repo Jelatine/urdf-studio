@@ -15,6 +15,7 @@ import {
   type Robot,
 } from "../types/urdf";
 import { MeshEditor, parseUrdf, resolveMesh, validateUrdf, writeUrdf, type FitOptions, type FitResult } from "../wasm";
+import { redoStep, undoStep, type HistoryStep } from "./history";
 import { store, type ConfirmRequest, type EditTarget, type FitTarget, type ProjectInfo } from "./store";
 
 const s = () => store.getState();
@@ -110,6 +111,8 @@ function loadRobot(text: string, project: ProjectInfo) {
     robotDirty: false,
     robotUndo: [],
     robotRedo: [],
+    robotUndoSeq: [],
+    robotRedoSeq: [],
     meshPaths: {},
     meshInfo: {},
     meshVersion: s().meshVersion + 1,
@@ -161,8 +164,20 @@ export async function confirmDiscard(): Promise<boolean> {
   return choice === "discard";
 }
 
+/** Project paths of the meshes the robot references. */
+function referencedMeshPaths(): Set<string> {
+  const { robot, meshPaths } = s();
+  const out = new Set<string>();
+  for (const f of robot ? meshFilenames(robot) : []) {
+    const p = meshPaths[f];
+    if (p) out.add(p);
+  }
+  return out;
+}
+
 export function hasUnsavedChanges() {
-  return s().robotDirty || allMeshes().some(isModified);
+  const used = referencedMeshPaths();
+  return s().robotDirty || allMeshes().some((m) => used.has(m.path) && isModified(m));
 }
 
 export async function openProject(opened?: OpenedProject | null) {
@@ -205,20 +220,17 @@ export async function newProject() {
 
 /** Resolves true when the project was saved. */
 export async function saveProject(mode: SaveMode): Promise<boolean> {
-  const { robot, project, meshPaths } = s();
+  const { robot, project } = s();
   if (!robot || !project) return false;
   try {
     store.setState({ busy: "正在保存…" });
     const urdfText = writeUrdf(robot);
-    const modified = modifiedFiles();
-    const include = new Set<string>();
-    for (const f of meshFilenames(robot)) {
-      const p = meshPaths[f];
-      if (p) include.add(p);
-    }
+    const include = referencedMeshPaths();
+    // Meshes no longer referenced (e.g. an undone separate) are not written.
+    const modified = new Map([...modifiedFiles()].filter(([p]) => include.has(p)));
     const saved = await backend.save({ urdfText, modified, include: [...include], remove: [], mode });
     if (!saved) return false;
-    markSaved();
+    markSaved([...modified.keys()]);
     const files = new Set(project.files);
     for (const p of modified.keys()) files.add(p);
     store.setState({ robotDirty: false, project: { ...project, files: [...files] }, meshVersion: s().meshVersion + 1 });
@@ -237,6 +249,42 @@ export async function saveProject(mode: SaveMode): Promise<boolean> {
 export function editRobot(fn: (r: Robot) => void, merge = false) {
   s().editRobot(fn, { merge });
   validate();
+}
+
+// ------------------------------------------------------------ undo / redo
+
+/** Undo in any mode: the most recent robot or mesh step (see history.ts). */
+export function undo() {
+  finishHistoryStep(undoStep(s().mode === "object"), "撤销", "没有可撤销的操作");
+}
+
+export function redo() {
+  finishHistoryStep(redoStep(s().mode === "object"), "重做", "没有可重做的操作");
+}
+
+function editTargetValid(t: EditTarget): boolean {
+  const l = s().robot?.links.find((x) => x.name === t.link);
+  const g = (t.role === "visual" ? l?.visuals[t.index] : l?.collisions[t.index])?.geometry;
+  return g?.type === "mesh" && s().meshPaths[g.filename] === t.meshPath;
+}
+
+function finishHistoryStep(step: HistoryStep | null, verb: string, none: string) {
+  if (!step) {
+    s().setStatus(none);
+    return;
+  }
+  if (step.robot) {
+    validate();
+    store.setState({ jointValues: initialJointValues(s().robot!, s().jointValues) });
+  }
+  store.setState((st) => ({ lastOp: null, meshVersion: st.meshVersion + 1 }));
+  const t = s().editTarget;
+  if (s().mode === "edit" && t) {
+    // Undoing e.g. "convert to mesh" removes the mesh being edited.
+    if (!editTargetValid(t)) exitEditMode();
+    else store.setState({ meshStats: getMesh(t.meshPath)?.editor.stats() ?? null });
+  }
+  s().setStatus(`${verb}: ${[...new Set(step.labels)].join(" + ")}`);
 }
 
 export function renameLink(oldName: string, name: string) {

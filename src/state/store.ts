@@ -83,6 +83,9 @@ interface State {
   robotDirty: boolean;
   robotUndo: Robot[];
   robotRedo: Robot[];
+  /** Global undo sequence numbers of the robot steps (parallel to robotUndo/robotRedo, see history.ts). */
+  robotUndoSeq: number[];
+  robotRedoSeq: number[];
   issues: Issue[];
   /** filename (as written in the URDF) -> project path, or null if missing. */
   meshPaths: Record<string, string | null>;
@@ -130,12 +133,20 @@ interface State {
 
 let lastMergeKey = 0;
 
+// Supplies the global undo sequence number of a new robot step (history.ts).
+let undoSeqSource: () => number = () => 0;
+export function setUndoSeqSource(f: () => number) {
+  undoSeqSource = f;
+}
+
 export const useStore = create<State>((set, get) => ({
   project: null,
   robot: null,
   robotDirty: false,
   robotUndo: [],
   robotRedo: [],
+  robotUndoSeq: [],
+  robotRedoSeq: [],
   issues: [],
   meshPaths: {},
   meshInfo: {},
@@ -175,7 +186,7 @@ export const useStore = create<State>((set, get) => ({
   setStatus: (status, statusKind = "info") => set({ status, statusKind }),
 
   editRobot: (fn, opts) => {
-    const { robot, robotUndo } = get();
+    const { robot, robotUndo, robotUndoSeq } = get();
     if (!robot) return;
     const next = structuredClone(robot);
     fn(next);
@@ -188,20 +199,36 @@ export const useStore = create<State>((set, get) => ({
       robot: next,
       robotDirty: true,
       robotUndo: merge ? robotUndo : [...robotUndo.slice(-99), robot],
+      robotUndoSeq: merge ? robotUndoSeq : [...robotUndoSeq.slice(-99), undoSeqSource()],
       robotRedo: [],
+      robotRedoSeq: [],
     });
   },
   undoRobot: () => {
-    const { robot, robotUndo, robotRedo } = get();
+    const { robot, robotUndo, robotRedo, robotUndoSeq, robotRedoSeq } = get();
     if (!robot || !robotUndo.length) return;
     const prev = robotUndo[robotUndo.length - 1];
-    set({ robot: prev, robotUndo: robotUndo.slice(0, -1), robotRedo: [...robotRedo, robot], robotDirty: true });
+    set({
+      robot: prev,
+      robotUndo: robotUndo.slice(0, -1),
+      robotRedo: [...robotRedo, robot],
+      robotUndoSeq: robotUndoSeq.slice(0, -1),
+      robotRedoSeq: [...robotRedoSeq, robotUndoSeq[robotUndoSeq.length - 1] ?? 0],
+      robotDirty: true,
+    });
   },
   redoRobot: () => {
-    const { robot, robotUndo, robotRedo } = get();
+    const { robot, robotUndo, robotRedo, robotUndoSeq, robotRedoSeq } = get();
     if (!robot || !robotRedo.length) return;
     const next = robotRedo[robotRedo.length - 1];
-    set({ robot: next, robotRedo: robotRedo.slice(0, -1), robotUndo: [...robotUndo, robot], robotDirty: true });
+    set({
+      robot: next,
+      robotRedo: robotRedo.slice(0, -1),
+      robotUndo: [...robotUndo, robot],
+      robotRedoSeq: robotRedoSeq.slice(0, -1),
+      robotUndoSeq: [...robotUndoSeq, robotRedoSeq[robotRedoSeq.length - 1] ?? 0],
+      robotDirty: true,
+    });
   },
 }));
 

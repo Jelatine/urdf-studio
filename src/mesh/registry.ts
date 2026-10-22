@@ -144,8 +144,10 @@ export function modifiedFiles(): Map<string, Uint8Array> {
   return out;
 }
 
-export function markSaved() {
-  for (const e of entries.values()) {
+export function markSaved(paths: string[]) {
+  for (const p of paths) {
+    const e = entries.get(p);
+    if (!e) continue;
     e.editor.setDirty(false);
     e.isNew = false;
   }

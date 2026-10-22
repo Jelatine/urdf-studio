@@ -9,13 +9,15 @@ import {
   exitEditMode,
   newProject,
   openFitDialog,
+  redo,
+  undo,
   openProject,
   saveProject,
 } from "../state/actions";
 import { store, type MenuState, type ParamSpec } from "../state/store";
 import { getEngine } from "../viewport/engine";
 import type { Command } from "../wasm";
-import { currentEntry, redoMesh, runCmd, undoMesh } from "./meshOps";
+import { currentEntry, runCmd } from "./meshOps";
 
 const s = () => store.getState();
 const eng = () => getEngine();
@@ -271,15 +273,6 @@ function contextMenu() {
   else menus.face();
 }
 
-function undo() {
-  if (s().mode === "edit") undoMesh();
-  else s().undoRobot();
-}
-
-function redo() {
-  if (s().mode === "edit") redoMesh();
-  else s().redoRobot();
-}
 
 function toggleEdit() {
   if (s().mode === "edit") exitEditMode();

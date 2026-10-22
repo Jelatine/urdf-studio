@@ -123,6 +123,29 @@ impl MeshEditor {
         self.ed.dirty = dirty;
     }
 
+    /// Ids of the undo steps (oldest first); ids stay the same when a step
+    /// is undone and redone.
+    #[wasm_bindgen(js_name = undoIds)]
+    pub fn undo_ids(&self) -> Vec<f64> {
+        self.ed.undo_ids().into_iter().map(|i| i as f64).collect()
+    }
+
+    #[wasm_bindgen(js_name = undoLabel)]
+    pub fn undo_label(&self) -> Option<String> {
+        self.ed.undo_label().map(str::to_string)
+    }
+
+    /// Id of the next redo step, or -1.
+    #[wasm_bindgen(js_name = redoId)]
+    pub fn redo_id(&self) -> f64 {
+        self.ed.redo_id().map_or(-1.0, |i| i as f64)
+    }
+
+    #[wasm_bindgen(js_name = clearRedo)]
+    pub fn clear_redo(&mut self) {
+        self.ed.clear_redo();
+    }
+
     #[wasm_bindgen(js_name = clearHistory)]
     pub fn clear_history(&mut self) {
         self.ed.clear_history();

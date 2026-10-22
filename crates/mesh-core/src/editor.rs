@@ -37,6 +37,9 @@ impl Falloff {
 struct Snapshot {
     mesh: Mesh,
     label: String,
+    /// Stable id of the step (kept when it moves between undo and redo),
+    /// so the app can order steps against its other undo histories.
+    id: u64,
 }
 
 struct TransformSession {
@@ -58,6 +61,7 @@ pub struct Editor {
     pub geom_version: u64,
     /// Whether the mesh differs from what was loaded/saved.
     pub dirty: bool,
+    next_id: u64,
 }
 
 fn mesh_size(m: &Mesh) -> usize {
@@ -76,11 +80,18 @@ impl Editor {
             version: 0,
             geom_version: 0,
             dirty: false,
+            next_id: 0,
         }
     }
 
+    fn new_id(&mut self) -> u64 {
+        self.next_id += 1;
+        self.next_id
+    }
+
     pub fn push_undo(&mut self, label: &str) {
-        self.undo.push(Snapshot { mesh: self.mesh.clone(), label: label.to_string() });
+        let id = self.new_id();
+        self.undo.push(Snapshot { mesh: self.mesh.clone(), label: label.to_string(), id });
         self.redo.clear();
         let mut total: usize = self.undo.iter().map(|s| mesh_size(&s.mesh)).sum();
         while self.undo.len() > self.max_undo || (total > self.undo_budget && self.undo.len() > 1) {
@@ -106,7 +117,8 @@ impl Editor {
         let backup = self.mesh.clone();
         match f(&mut self.mesh) {
             Ok(v) => {
-                self.undo.push(Snapshot { mesh: backup, label: label.to_string() });
+                let id = self.new_id();
+                self.undo.push(Snapshot { mesh: backup, label: label.to_string(), id });
                 self.redo.clear();
                 let keep = self.max_undo;
                 if self.undo.len() > keep {
@@ -149,7 +161,7 @@ impl Editor {
     pub fn undo(&mut self) -> Option<String> {
         let s = self.undo.pop()?;
         let cur = std::mem::replace(&mut self.mesh, s.mesh);
-        self.redo.push(Snapshot { mesh: cur, label: s.label.clone() });
+        self.redo.push(Snapshot { mesh: cur, label: s.label.clone(), id: s.id });
         self.touched();
         Some(s.label)
     }
@@ -157,7 +169,7 @@ impl Editor {
     pub fn redo(&mut self) -> Option<String> {
         let s = self.redo.pop()?;
         let cur = std::mem::replace(&mut self.mesh, s.mesh);
-        self.undo.push(Snapshot { mesh: cur, label: s.label.clone() });
+        self.undo.push(Snapshot { mesh: cur, label: s.label.clone(), id: s.id });
         self.touched();
         Some(s.label)
     }
@@ -168,6 +180,24 @@ impl Editor {
 
     pub fn can_redo(&self) -> bool {
         !self.redo.is_empty()
+    }
+
+    /// Ids of the undo steps, oldest first.
+    pub fn undo_ids(&self) -> Vec<u64> {
+        self.undo.iter().map(|s| s.id).collect()
+    }
+
+    pub fn undo_label(&self) -> Option<&str> {
+        self.undo.last().map(|s| s.label.as_str())
+    }
+
+    /// Id of the step `redo` would re-apply.
+    pub fn redo_id(&self) -> Option<u64> {
+        self.redo.last().map(|s| s.id)
+    }
+
+    pub fn clear_redo(&mut self) {
+        self.redo.clear();
     }
 
     pub fn clear_history(&mut self) {
@@ -324,6 +354,24 @@ mod tests {
     use crate::primitives;
     use crate::select::{SelectAction, SelectOp};
     use crate::ElemKind;
+
+    #[test]
+    fn step_ids_survive_undo_redo() {
+        let mut ed = Editor::new(primitives::cube(1.0));
+        ed.mesh.select_all(SelectAction::Select);
+        ed.apply("A", |m| m.delete(DeleteKind::Faces)).unwrap();
+        ed.push_undo_step("B");
+        let ids = ed.undo_ids();
+        assert_eq!(ids.len(), 2);
+        assert_eq!(ed.undo_label(), Some("B"));
+        ed.undo();
+        assert_eq!(ed.redo_id(), Some(ids[1]));
+        ed.redo();
+        assert_eq!(ed.undo_ids(), ids);
+        ed.undo();
+        ed.clear_redo();
+        assert_eq!(ed.redo_id(), None);
+    }
 
     #[test]
     fn undo_redo_roundtrip() {

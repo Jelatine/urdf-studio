@@ -2,8 +2,9 @@
 
 import { getMesh, type MeshEntry } from "../mesh/registry";
 import { editRobot, newMeshLocation, registerNewMesh } from "../state/actions";
-import { store, type ParamSpec } from "../state/store";
-import { uniqueName } from "../types/urdf";
+import { undoGroup } from "../state/history";
+import { store, type EditTarget, type ParamSpec } from "../state/store";
+import { uniqueName, type Robot } from "../types/urdf";
 import type { CmdOutput, Command, FitOptions, MeshStats } from "../wasm";
 
 const s = () => store.getState();
@@ -68,6 +69,7 @@ export function adjustLast(cmd: Command) {
   }
 }
 
+/** Reverts the edited mesh's last step (cancelling a modal operator). */
 export function undoMesh() {
   const e = currentEntry();
   if (!e) return;
@@ -77,14 +79,6 @@ export function undoMesh() {
   s().setStatus(label ? `撤销: ${label}` : "没有可撤销的操作");
 }
 
-export function redoMesh() {
-  const e = currentEntry();
-  if (!e) return;
-  const label = e.editor.redo();
-  store.setState({ lastOp: null });
-  meshChanged();
-  s().setStatus(label ? `重做: ${label}` : "没有可重做的操作");
-}
 
 /**
  * Separate (P): moves the selection into a new mesh file, attached either as
@@ -95,6 +89,11 @@ export function separateSelection(asNewLink: boolean) {
   const t = s().editTarget;
   const robot = s().robot;
   if (!e || !t || !robot) return;
+  // The mesh change and the robot change undo as one step.
+  undoGroup(() => separateInto(e, t, robot, asNewLink));
+}
+
+function separateInto(e: MeshEntry, t: EditTarget, robot: Robot, asNewLink: boolean) {
   let part;
   try {
     part = e.editor.separate();
