@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { separateSelection } from "../edit/meshOps";
 import { operators, runOp } from "../edit/operators";
-import { useStore } from "../state/store";
+import { useStore, type ConfirmRequest } from "../state/store";
 import { writeUrdf } from "../wasm";
 
 function Modal(props: { title: string; children: React.ReactNode; wide?: boolean }) {
@@ -155,8 +155,53 @@ function UrdfSourceDialog() {
   );
 }
 
+function ConfirmDialog({ req }: { req: ConfirmRequest }) {
+  const primary = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    primary.current?.focus();
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") req.resolve(null);
+      else if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement)) req.resolve(req.defaultId ?? null);
+      else return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  }, [req]);
+  return (
+    <div className="modal-backdrop confirm-backdrop">
+      <div className="modal confirm" role="alertdialog" aria-labelledby="confirm-title">
+        <div className="confirm-body">
+          <div className="confirm-icon">!</div>
+          <div>
+            <div id="confirm-title" className="confirm-title">
+              {req.title}
+            </div>
+            <div className="confirm-msg">{req.message}</div>
+          </div>
+        </div>
+        <div className="confirm-actions">
+          {req.buttons.map((b) => (
+            <button
+              key={b.id}
+              ref={b.id === req.defaultId ? primary : undefined}
+              className={b.kind ?? ""}
+              onClick={() => req.resolve(b.id === "cancel" ? null : b.id)}
+            >
+              {b.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function Dialogs() {
   const dialog = useStore((s) => s.dialog);
+  const confirm = useStore((s) => s.confirm);
+  if (confirm) return <ConfirmDialog req={confirm} />;
   if (dialog === "search") return <SearchDialog />;
   if (dialog === "help") return <HelpDialog />;
   if (dialog === "separate") return <SeparateDialog />;

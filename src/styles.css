@@ -79,21 +79,122 @@ textarea {
   height: 100%;
 }
 
-/* ---------- menubar ---------- */
-.menubar {
+/* ---------- title bar ---------- */
+.titlebar {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 2px;
-  height: 30px;
-  padding: 0 8px;
-  background: #18191b;
-  border-bottom: 1px solid var(--line);
+  height: 36px;
+  padding-left: 10px;
+  background: linear-gradient(#1b1c1f, #161719);
+  border-bottom: 1px solid #2c2e33;
   flex-shrink: 0;
+  user-select: none;
+  -webkit-user-select: none;
 }
-.brand {
-  color: var(--accent);
+.titlebar.mac-overlay {
+  padding-left: 80px; /* room for the native traffic lights */
+}
+.app-logo {
+  width: 18px;
+  height: 18px;
+  margin-right: 8px;
+  pointer-events: none;
+}
+.menus {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  position: relative;
+  z-index: 2;
+}
+.menus .menu-title {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 5px;
+  color: #c9ccd2;
+}
+.menus .menu-title:hover {
+  background: #2c2e33;
+}
+.menus .menu.open .menu-title {
+  background: #34373d;
+  color: #fff;
+}
+.title-center {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  transform: translateX(-50%);
+  max-width: 42%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none; /* drags fall through to the title bar */
+  white-space: nowrap;
+  overflow: hidden;
+}
+.title-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-weight: 600;
-  margin-right: 10px;
+  color: #e4e6ea;
+}
+.title-path {
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.dirty-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.mode-pill {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  color: #b9bcc3;
+  background: #2a2c31;
+  border: 1px solid #383a40;
+}
+.mode-pill.edit {
+  color: #ffc58f;
+  background: #3a2a1a;
+  border-color: #6b4521;
+}
+.drag-fill {
+  flex: 1;
+  align-self: stretch;
+}
+.win-controls {
+  display: flex;
+  align-self: stretch;
+  position: relative;
+  z-index: 2;
+}
+.win-btn {
+  width: 46px;
+  height: 100%;
+  border: none;
+  border-radius: 0;
+  background: none;
+  color: #c9ccd2;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+.win-btn:hover:not(:disabled) {
+  background: #2f3136;
+}
+.win-btn.close:hover:not(:disabled) {
+  background: #c42b1c;
+  color: #fff;
 }
 .menu {
   position: relative;
@@ -101,10 +202,6 @@ textarea {
 .menu-title {
   background: none;
   border: none;
-  padding: 4px 10px;
-}
-.menu.open .menu-title {
-  background: #333;
 }
 .menu-drop {
   position: absolute;
@@ -146,14 +243,6 @@ textarea {
 .spacer {
   flex: 1;
 }
-.project-path {
-  color: var(--dim);
-  max-width: 50%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* ---------- layout ---------- */
 .main {
   display: flex;
@@ -740,6 +829,71 @@ textarea {
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+}
+.confirm-backdrop {
+  z-index: 400;
+  align-items: center;
+  padding-top: 0;
+}
+.modal.confirm {
+  width: 420px;
+  animation: confirm-in 0.12s ease-out;
+}
+@keyframes confirm-in {
+  from {
+    transform: scale(0.96);
+    opacity: 0;
+  }
+}
+.confirm-body {
+  display: flex;
+  gap: 14px;
+  padding: 18px 18px 8px;
+}
+.confirm-icon {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 18px;
+  color: #1d1e21;
+  background: var(--accent);
+}
+.confirm-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.confirm-msg {
+  color: #c3c6cc;
+  line-height: 1.6;
+}
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px 16px;
+}
+.confirm-actions button {
+  min-width: 76px;
+  padding: 5px 12px;
+}
+.confirm-actions button:first-child {
+  margin-right: auto;
+}
+button.danger {
+  color: #ffb3b3;
+  border-color: #7a3a3a;
+}
+button.danger:hover:not(:disabled) {
+  background: #5a2a2a;
+}
+button:focus-visible {
+  outline: 2px solid var(--accent2);
+  outline-offset: 1px;
 }
 .modal.wide {
   width: min(1000px, 92vw);

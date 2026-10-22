@@ -56,6 +56,16 @@ export interface MenuState {
   items: { label: string; hint?: string; run: () => void; divider?: boolean }[];
 }
 
+/** An in-app confirmation dialog; `resolve` receives the chosen button id (or null on cancel). */
+export interface ConfirmRequest {
+  title: string;
+  message: string;
+  buttons: { id: string; label: string; kind?: "primary" | "danger" }[];
+  /** Button triggered by Enter. */
+  defaultId?: string;
+  resolve: (id: string | null) => void;
+}
+
 interface State {
   project: ProjectInfo | null;
   robot: Robot | null;
@@ -93,6 +103,7 @@ interface State {
   statusKind: "info" | "error" | "ok";
   modalHint: string | null;
   menu: MenuState | null;
+  confirm: ConfirmRequest | null;
   dialog: null | "help" | "search" | "separate" | "about" | "urdf-source";
   busy: string | null;
 
@@ -141,6 +152,7 @@ export const useStore = create<State>((set, get) => ({
   statusKind: "info",
   modalHint: null,
   menu: null,
+  confirm: null,
   dialog: null,
   busy: null,
 

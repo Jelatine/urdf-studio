@@ -2,14 +2,15 @@ import { useEffect } from "react";
 import { installKeymap } from "./edit/keymap";
 import { runOp } from "./edit/operators";
 import { backend } from "./io/project";
+import { appWindow } from "./io/window";
 import { Dialogs } from "./panels/Dialogs";
 import { Inspector } from "./panels/Inspector";
 import { JointPanel } from "./panels/JointPanel";
-import { MenuBar } from "./panels/MenuBar";
 import { PopupMenu } from "./panels/PopupMenu";
+import { TitleBar } from "./panels/TitleBar";
 import { Outliner } from "./panels/Outliner";
 import { StatusBar } from "./panels/StatusBar";
-import { hasUnsavedChanges, openProject } from "./state/actions";
+import { confirmDiscard, hasUnsavedChanges, openProject } from "./state/actions";
 import { useStore } from "./state/store";
 import { Viewport } from "./viewport/Viewport";
 
@@ -18,6 +19,54 @@ export default function App() {
   const busy = useStore((s) => s.busy);
 
   useEffect(() => installKeymap(), []);
+
+  // No browser context menu (back / reload / save as…) anywhere; only editable
+  // text fields keep the native cut/copy/paste menu.
+  useEffect(() => {
+    const menu = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      const editable = (t instanceof HTMLInputElement && !t.readOnly) || (t instanceof HTMLTextAreaElement && !t.readOnly) || t.isContentEditable;
+      if (!editable) e.preventDefault();
+    };
+    // Browser-level reload/print/find shortcuts make no sense in the desktop app.
+    const keys = (e: KeyboardEvent) => {
+      const ctrl = e.ctrlKey || e.metaKey;
+      if (e.key === "F5" || e.key === "F7" || (ctrl && ["KeyR", "KeyP", "KeyF", "KeyG", "KeyU"].includes(e.code))) e.preventDefault();
+    };
+    window.addEventListener("contextmenu", menu);
+    if (appWindow) window.addEventListener("keydown", keys, true);
+    return () => {
+      window.removeEventListener("contextmenu", menu);
+      window.removeEventListener("keydown", keys, true);
+    };
+  }, []);
+
+  // Closing the desktop window asks about unsaved changes first.
+  useEffect(() => {
+    if (!appWindow) return;
+    const w = appWindow;
+    let closing = false;
+    const off = w.onCloseRequested(async (e) => {
+      if (!hasUnsavedChanges()) return;
+      e.preventDefault();
+      if (closing) return;
+      closing = true;
+      try {
+        if (await confirmDiscard()) await w.destroy();
+      } finally {
+        closing = false;
+      }
+    });
+    return () => void off.then((f) => f());
+  }, []);
+
+  const robotName = useStore((s) => s.robot?.name);
+  const dirty = useStore((s) => s.robotDirty);
+  useEffect(() => {
+    const title = robotName ? `${dirty ? "● " : ""}${robotName} — URDF Studio` : "URDF Studio";
+    document.title = title;
+    void appWindow?.setTitle(title);
+  }, [robotName, dirty]);
 
   useEffect(() => {
     const warn = (e: BeforeUnloadEvent) => {
@@ -45,7 +94,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <MenuBar />
+      <TitleBar />
       <div className="main">
         <aside className="side left">
           <Outliner />

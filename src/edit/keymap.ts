@@ -135,7 +135,7 @@ export function installKeymap(): () => void {
       return;
     }
     const st = store.getState();
-    if (st.menu || st.dialog) return; // handled by the open menu/dialog
+    if (st.menu || st.dialog || st.confirm) return; // handled by the open menu/dialog
     const eng = getEngine();
     if (eng?.modal) {
       if (eng.handleModalKey(e)) e.preventDefault();

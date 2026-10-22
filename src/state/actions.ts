@@ -13,7 +13,7 @@ import {
   type Robot,
 } from "../types/urdf";
 import { MeshEditor, parseUrdf, resolveMesh, validateUrdf, writeUrdf } from "../wasm";
-import { store, type EditTarget, type ProjectInfo } from "./store";
+import { store, type ConfirmRequest, type EditTarget, type ProjectInfo } from "./store";
 
 const s = () => store.getState();
 
@@ -125,9 +125,38 @@ function loadRobot(text: string, project: ProjectInfo) {
   void syncMeshes();
 }
 
-function confirmDiscard(): boolean {
+/** Shows the in-app confirmation dialog and resolves with the chosen button id (null = cancelled). */
+export function ask(req: Omit<ConfirmRequest, "resolve">): Promise<string | null> {
+  return new Promise((resolve) => {
+    s().confirm?.resolve(null);
+    store.setState({
+      confirm: {
+        ...req,
+        resolve: (id) => {
+          store.setState({ confirm: null });
+          resolve(id);
+        },
+      },
+    });
+  });
+}
+
+/** Asks what to do with unsaved changes; resolves true when it's OK to continue. */
+export async function confirmDiscard(): Promise<boolean> {
   if (!hasUnsavedChanges()) return true;
-  return window.confirm("当前项目有未保存的修改，确定放弃吗？");
+  const name = s().robot?.name ?? "当前项目";
+  const choice = await ask({
+    title: "未保存的修改",
+    message: `“${name}” 有未保存的修改。继续之前要保存吗？`,
+    buttons: [
+      { id: "cancel", label: "取消" },
+      { id: "discard", label: "不保存", kind: "danger" },
+      { id: "save", label: "保存", kind: "primary" },
+    ],
+    defaultId: "save",
+  });
+  if (choice === "save") return saveProject("inplace");
+  return choice === "discard";
 }
 
 export function hasUnsavedChanges() {
@@ -135,7 +164,7 @@ export function hasUnsavedChanges() {
 }
 
 export async function openProject(opened?: OpenedProject | null) {
-  if (!confirmDiscard()) return;
+  if (!(await confirmDiscard())) return;
   try {
     store.setState({ busy: "正在打开…" });
     const p = opened ?? (await backend.open());
@@ -156,7 +185,7 @@ export async function openFolderBrowser() {
 
 export async function switchUrdf(path: string) {
   const { project } = s();
-  if (!project || !confirmDiscard()) return;
+  if (!project || !(await confirmDiscard())) return;
   try {
     const text = await backend.selectUrdf(path);
     loadRobot(text, { ...project, urdfPath: path });
@@ -166,15 +195,16 @@ export async function switchUrdf(path: string) {
 }
 
 export async function newProject() {
-  if (!confirmDiscard()) return;
+  if (!(await confirmDiscard())) return;
   const urdf = `<?xml version="1.0"?>\n<robot name="new_robot">\n  <link name="base_link">\n    <visual>\n      <geometry><box size="0.2 0.2 0.1"/></geometry>\n    </visual>\n  </link>\n</robot>\n`;
   const p = await backend.newProject(urdf);
   loadRobot(p.urdfText, { kind: p.kind, origin: p.origin, urdfPath: p.urdfPath, candidates: p.candidates, files: p.files });
 }
 
-export async function saveProject(mode: SaveMode) {
+/** Resolves true when the project was saved. */
+export async function saveProject(mode: SaveMode): Promise<boolean> {
   const { robot, project, meshPaths } = s();
-  if (!robot || !project) return;
+  if (!robot || !project) return false;
   try {
     store.setState({ busy: "正在保存…" });
     const urdfText = writeUrdf(robot);
@@ -185,14 +215,16 @@ export async function saveProject(mode: SaveMode) {
       if (p) include.add(p);
     }
     const saved = await backend.save({ urdfText, modified, include: [...include], remove: [], mode });
-    if (!saved) return;
+    if (!saved) return false;
     markSaved();
     const files = new Set(project.files);
     for (const p of modified.keys()) files.add(p);
     store.setState({ robotDirty: false, project: { ...project, files: [...files] }, meshVersion: s().meshVersion + 1 });
     s().setStatus(`已保存到 ${saved}`, "ok");
+    return true;
   } catch (e) {
     s().setStatus(`保存失败: ${errMsg(e)}`, "error");
+    return false;
   } finally {
     store.setState({ busy: null });
   }
