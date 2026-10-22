@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import * as THREE from "three";
 import { getMesh } from "../mesh/registry";
-import { convertToMesh, editRobot, enterEditMode, renameJoint, renameLink, updateJoint } from "../state/actions";
+import { convertToMesh, editRobot, enterEditMode, openFitDialog, renameJoint, renameLink, updateJoint } from "../state/actions";
 import { useStore } from "../state/store";
 import { isMovable, jointRange, zeroPose, type Collision, type Geometry, type Joint, type JointType, type Link, type Material, type Pose, type Robot, type Visual } from "../types/urdf";
 import { getEngine } from "../viewport/engine";
@@ -153,6 +153,16 @@ function GeomItem(props: { link: Link; role: "visual" | "collision"; index: numb
               title="在视图中编辑该网格 (Tab)"
             >
               {editing ? "编辑中" : "编辑网格"}
+            </button>
+          ) : null}
+          {g.type === "mesh" ? (
+            <button
+              className="small"
+              disabled={!editable}
+              onClick={() => openFitDialog({ link: link.name, role, index, meshPath: meshPath!, all: true })}
+              title="用立方体 / 圆柱 / 球拟合整个网格，生成碰撞体 (Shift+Alt+F)"
+            >
+              拟合
             </button>
           ) : (
             <button className="small" onClick={() => convertToMesh(link.name, role, index)} title="把基本几何体转换为可编辑的 STL 网格">

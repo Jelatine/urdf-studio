@@ -3,6 +3,7 @@
 
 use mesh_core::command::Command;
 use mesh_core::editor::{Editor, Falloff};
+use mesh_core::fit::FitOptions;
 use mesh_core::pick::Projector;
 use mesh_core::render::RenderBuffers;
 use mesh_core::{io, Mesh, SelectMode};
@@ -358,6 +359,14 @@ impl MeshEditor {
     pub fn separate(&mut self) -> Result<MeshEditor, JsError> {
         let part = self.ed.apply("Separate", |m| m.separate()).map_err(js_err)?;
         Ok(Self::wrap(part))
+    }
+
+    /// Fits box/cylinder/sphere shapes to the selection (or the whole mesh);
+    /// see `mesh_core::fit::FitOptions`. Read-only.
+    #[wasm_bindgen(js_name = fitPrimitives)]
+    pub fn fit_primitives(&self, opts: JsValue) -> Result<JsValue, JsError> {
+        let opts: FitOptions = serde_wasm_bindgen::from_value(opts).map_err(js_err)?;
+        to_js(&self.ed.mesh.fit_primitives(&opts).map_err(js_err)?)
     }
 
     pub fn undo(&mut self) -> Option<String> {

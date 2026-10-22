@@ -830,6 +830,44 @@ textarea {
   border-radius: 8px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
 }
+.modal-backdrop.floating {
+  background: transparent;
+  pointer-events: none;
+  justify-content: flex-end;
+  padding: 56px 346px 0 0;
+}
+.modal-backdrop.floating .modal {
+  width: 380px;
+  pointer-events: auto;
+}
+.fit-source {
+  padding: 0 8px 6px;
+}
+.fit-results {
+  margin: 8px 8px 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  min-height: 24px;
+}
+.fit-result {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 0;
+}
+.fit-error {
+  color: var(--err);
+}
+.fit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 8px 2px;
+}
+.fit-actions button {
+  min-width: 76px;
+  padding: 5px 12px;
+}
 .confirm-backdrop {
   z-index: 400;
   align-items: center;

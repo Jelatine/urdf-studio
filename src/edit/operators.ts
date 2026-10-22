@@ -8,6 +8,7 @@ import {
   enterEditMode,
   exitEditMode,
   newProject,
+  openFitDialog,
   openProject,
   saveProject,
 } from "../state/actions";
@@ -186,6 +187,8 @@ export const menus = {
       item("选择锐边", cmd({ op: "select_sharp_edges", angle: 30 }, "选择锐边", [ANGLE("angle", "锐度 (°)")])),
       item("选择边界循环", cmd({ op: "select_boundary_loop" }, "选择边界循环")),
       item("选择循环内侧区域", cmd({ op: "select_inner_region" }, "选择内侧区域")),
+      divider,
+      item("拟合基本形状…", () => openFitDialog(), "Shift+Alt+F"),
     ]),
   face: () =>
     openMenu("面", [
@@ -202,6 +205,7 @@ export const menus = {
       item("切分 (Bisect)", () => eng()?.startBisect()),
       divider,
       item("选择相连平展面", linkedFlat, "Shift+F"),
+      item("拟合基本形状…", () => openFitDialog(), "Shift+Alt+F"),
       item("按边数选择", cmd({ op: "select_by_sides", sides: 4, compare: "greater" }, "按边数选择面", [
         { key: "sides", label: "边数", type: "int", min: 3, step: 1 },
         { key: "compare", label: "比较", type: "enum", options: [
@@ -220,6 +224,7 @@ export const menus = {
       item("按距离合并", cmd({ op: "remove_doubles", distance: 0.0001 }, "按距离合并", [{ key: "distance", label: "合并距离", type: "number", min: 0, step: 0.0001 }])),
       item("拆分 (Y)", cmd({ op: "split" }, "拆分"), "Y"),
       item("分离 (P)", () => store.setState({ dialog: "separate" }), "P"),
+      item("拟合基本形状…", () => openFitDialog(), "Shift+Alt+F"),
     ]),
   select: () =>
     openMenu("选择", [
@@ -316,6 +321,7 @@ export const operators: Operator[] = [
   { id: "view.collision", label: "显示碰撞体", group: "视图", mode: "any", run: () => store.setState({ showCollision: !s().showCollision }) },
   // ---- object mode
   { id: "obj.addLink", label: "添加子 link", group: "对象", keys: "Shift+A", mode: "object", run: () => addChildLink() },
+  { id: "obj.fit", label: "拟合碰撞体 (整个网格)…", group: "对象", keys: "Shift+Alt+F", mode: "object", run: () => openFitDialog() },
   { id: "obj.delete", label: "删除 link (含子树)", group: "对象", keys: "X / Delete", mode: "object", run: deleteSelection },
   { id: "obj.move", label: "移动关节原点 (操纵器)", group: "对象", keys: "G", mode: "object", run: () => store.setState({ gizmo: "translate" }) },
   { id: "obj.rotate", label: "旋转关节原点 (操纵器)", group: "对象", keys: "R", mode: "object", run: () => store.setState({ gizmo: "rotate" }) },
@@ -371,6 +377,7 @@ export const operators: Operator[] = [
   { id: "mesh.rip", label: "撕裂 (沿边拆分)", group: "网格", keys: "V", mode: "edit", run: ripAndMove },
   { id: "mesh.split", label: "拆分", group: "网格", keys: "Y", mode: "edit", run: cmd({ op: "split" }, "拆分") },
   { id: "mesh.separate", label: "分离选中项…", group: "网格", keys: "P", mode: "edit", run: () => store.setState({ dialog: "separate" }) },
+  { id: "mesh.fit", label: "拟合基本形状…", group: "网格", keys: "Shift+Alt+F", mode: "edit", run: () => openFitDialog() },
   { id: "mesh.duplicate", label: "复制并移动", group: "网格", keys: "Shift+D", mode: "edit", run: duplicateAndMove },
   { id: "mesh.triangulate", label: "三角化", group: "网格", keys: "Ctrl+T", mode: "edit", run: cmd({ op: "triangulate" }, "三角化面") },
   { id: "mesh.quads", label: "三角面转四边面", group: "网格", keys: "Alt+J", mode: "edit", run: cmd({ op: "tris_to_quads", angle: 40 }, "三角面转四边面", [ANGLE("angle", "最大角度 (°)")]) },

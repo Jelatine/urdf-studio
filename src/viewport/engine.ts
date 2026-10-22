@@ -13,7 +13,7 @@ import { store, type ParamSpec } from "../state/store";
 import { stepSimulation } from "../sim/simulation";
 import type { Command } from "../wasm";
 import { EditOverlay } from "./editOverlay";
-import { poseFromObject, RobotView, type GeomRef } from "./robotView";
+import { applyPose, poseFromObject, primitiveGeometry, RobotView, type GeomRef } from "./robotView";
 
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
 (THREE.BufferGeometry.prototype as unknown as Record<string, unknown>).computeBoundsTree = computeBoundsTree;
@@ -92,6 +92,22 @@ export interface PickResult {
 let current: Engine | null = null;
 export const getEngine = () => current;
 
+/** Three orthogonal circles outlining a sphere. */
+function greatCircles(r: number): THREE.BufferGeometry {
+  const pts: number[] = [];
+  const n = 64;
+  for (let axis = 0; axis < 3; axis++) {
+    for (let i = 0; i < n; i++) {
+      for (const k of [i, i + 1]) {
+        const a = (k / n) * Math.PI * 2;
+        const p = [Math.cos(a) * r, Math.sin(a) * r, 0];
+        pts.push(p[(3 - axis) % 3], p[(4 - axis) % 3], p[(5 - axis) % 3]);
+      }
+    }
+  }
+  return new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+}
+
 export class Engine {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
@@ -105,6 +121,8 @@ export class Engine {
   overlayGeom: GeomRef | null = null;
   private overlayGeomVersion = -1;
   private overlayMode = "";
+  /** Shapes proposed by the fit dialog. */
+  private fitPreview: THREE.Group | null = null;
   readonly raycaster = new THREE.Raycaster();
   readonly cursor3d = new THREE.Group();
   private grid: THREE.Group;
@@ -200,6 +218,7 @@ export class Engine {
     this.ro.disconnect();
     window.removeEventListener("pointerup", this.onPointerUp);
     this.overlay?.dispose();
+    this.clearFitPreview();
     this.robotView.dispose();
     this.gizmo.dispose();
     this.controls.dispose();
@@ -304,6 +323,7 @@ export class Engine {
     if (st.selection !== prev.selection || st.gizmo !== prev.gizmo || st.mode !== prev.mode) this.updateSelectionVisuals();
     if (st.mode !== prev.mode || st.editTarget !== prev.editTarget) this.setupOverlay();
     if (st.xray !== prev.xray) this.overlay?.setXray(st.xray);
+    if (st.fitPreview !== prev.fitPreview && !this.needsRebuild) this.updateFitPreview();
   }
 
   private rebuildRobot() {
@@ -325,6 +345,7 @@ export class Engine {
     this.applyJoints();
     this.updateSelectionVisuals();
     this.setupOverlay();
+    this.updateFitPreview();
     const loading = Object.values(st.meshInfo).some((m) => m.status === "loading");
     if (!this.framedOnce && !loading && this.robotView.geoms.length) {
       this.framedOnce = true;
@@ -367,6 +388,41 @@ export class Engine {
     } else {
       ov.updateSelection();
     }
+  }
+
+  private clearFitPreview() {
+    this.fitPreview?.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.geometry) return;
+      m.geometry.dispose();
+      (m.material as THREE.Material).dispose();
+    });
+    this.fitPreview?.removeFromParent();
+    this.fitPreview = null;
+  }
+
+  private updateFitPreview() {
+    this.clearFitPreview();
+    const p = s().fitPreview;
+    const frame = p && this.robotView.links.get(p.link);
+    if (!p || !frame) return;
+    const group = new THREE.Group();
+    group.name = "fit-preview";
+    for (const it of p.items) {
+      const geo = primitiveGeometry(it.geometry);
+      if (!geo) continue;
+      const origin = new THREE.Group();
+      applyPose(origin, it.origin);
+      const fill = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xffa040, transparent: true, opacity: 0.18, depthWrite: false, depthTest: false }));
+      const outline = it.geometry.type === "sphere" ? greatCircles(it.geometry.radius) : new THREE.EdgesGeometry(geo, 20);
+      const lines = new THREE.LineSegments(outline, new THREE.LineBasicMaterial({ color: 0xffa040, depthTest: false }));
+      fill.renderOrder = 30;
+      lines.renderOrder = 31;
+      origin.add(fill, lines);
+      group.add(origin);
+    }
+    frame.add(group);
+    this.fitPreview = group;
   }
 
   private setupOverlay() {

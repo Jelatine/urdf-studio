@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Issue, Robot } from "../types/urdf";
+import type { Geometry, Issue, Pose, Robot } from "../types/urdf";
 import type { Command, MeshStats } from "../wasm";
 
 export type Selection = { kind: "link"; name: string } | { kind: "joint"; name: string } | null;
@@ -10,6 +10,17 @@ export interface EditTarget {
   role: "visual" | "collision";
   index: number;
   meshPath: string;
+}
+
+/** Source of "fit primitive": a mesh geometry, its selection or all of it. */
+export interface FitTarget extends EditTarget {
+  all: boolean;
+}
+
+/** Shapes drawn in the viewport while the fit dialog is open (link frame). */
+export interface FitPreview {
+  link: string;
+  items: { origin: Pose; geometry: Geometry }[];
 }
 
 export interface ParamSpec {
@@ -104,7 +115,9 @@ interface State {
   modalHint: string | null;
   menu: MenuState | null;
   confirm: ConfirmRequest | null;
-  dialog: null | "help" | "search" | "separate" | "about" | "urdf-source";
+  dialog: null | "help" | "search" | "separate" | "about" | "urdf-source" | "fit";
+  fitTarget: FitTarget | null;
+  fitPreview: FitPreview | null;
   busy: string | null;
 
   set: (p: Partial<State>) => void;
@@ -154,6 +167,8 @@ export const useStore = create<State>((set, get) => ({
   menu: null,
   confirm: null,
   dialog: null,
+  fitTarget: null,
+  fitPreview: null,
   busy: null,
 
   set: (p) => set(p),

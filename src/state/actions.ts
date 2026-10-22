@@ -1,3 +1,4 @@
+import * as THREE from "three";
 import { backend, type OpenedProject, type SaveMode } from "../io/project";
 import { addMesh, allMeshes, clearMeshes, getMesh, isModified, loadMesh, markSaved, modifiedFiles } from "../mesh/registry";
 import {
@@ -10,10 +11,11 @@ import {
   type Geometry,
   type Issue,
   type Joint,
+  type Pose,
   type Robot,
 } from "../types/urdf";
-import { MeshEditor, parseUrdf, resolveMesh, validateUrdf, writeUrdf } from "../wasm";
-import { store, type ConfirmRequest, type EditTarget, type ProjectInfo } from "./store";
+import { MeshEditor, parseUrdf, resolveMesh, validateUrdf, writeUrdf, type FitOptions, type FitResult } from "../wasm";
+import { store, type ConfirmRequest, type EditTarget, type FitTarget, type ProjectInfo } from "./store";
 
 const s = () => store.getState();
 
@@ -441,6 +443,96 @@ export function convertToMesh(link: string, role: "visual" | "collision", index:
     it.geometry = { type: "mesh", filename: reference, scale: null };
   });
   s().setStatus(`已转换为网格 ${path}（保存时写入）`, "ok");
+}
+
+// ------------------------------------------------------- primitive fitting
+
+export interface FittedShape {
+  /** In the link frame, ready to use as a URDF <origin>. */
+  origin: Pose;
+  geometry: Geometry;
+  result: FitResult;
+}
+
+/** "replace" replaces the target collision, or all of the link's collisions when fitting a visual. */
+export type FitOutput = "add_collision" | "replace_collision" | "add_visual";
+
+const r6 = (v: number) => Math.round(v * 1e6) / 1e6 || 0;
+
+function geometryItem(link: string, role: "visual" | "collision", index: number) {
+  const l = s().robot?.links.find((x) => x.name === link);
+  return role === "visual" ? l?.visuals[index] : l?.collisions[index];
+}
+
+/** Opens the fit dialog for the edited mesh's selection, or a whole mesh in object mode. */
+export function openFitDialog(target?: FitTarget) {
+  const st = s();
+  let t: FitTarget | null = target ?? null;
+  if (!t && st.mode === "edit" && st.editTarget) t = { ...st.editTarget, all: false };
+  if (!t) {
+    const found = findEditTarget();
+    if (found) t = { ...found, all: true };
+  }
+  if (!t) {
+    s().setStatus("所选 link 没有可拟合的网格", "error");
+    return;
+  }
+  store.setState({ fitTarget: t, dialog: "fit" });
+}
+
+/** Fits shapes to the target mesh and expresses them in the link frame. Throws on failure. */
+export function computeFit(t: FitTarget, opts: Omit<FitOptions, "all" | "scale">): FittedShape[] {
+  const item = geometryItem(t.link, t.role, t.index);
+  const entry = getMesh(t.meshPath);
+  if (!item || item.geometry.type !== "mesh" || !entry) throw new Error("网格不可用");
+  const scale = item.geometry.scale ?? [1, 1, 1];
+  const results = entry.editor.fitPrimitives({ ...opts, all: t.all, scale }) as FitResult[];
+  // The mesh scale applies inside the <origin> frame, so compose origin * fit.
+  const one = new THREE.Vector3(1, 1, 1);
+  const o = item.origin;
+  const originM = new THREE.Matrix4().compose(
+    new THREE.Vector3(...o.xyz),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(o.rpy[0], o.rpy[1], o.rpy[2], "ZYX")),
+    one,
+  );
+  return results.map((r) => {
+    const m = originM.clone().multiply(new THREE.Matrix4().compose(new THREE.Vector3(...r.center), new THREE.Quaternion(...r.rotation), one));
+    const pos = new THREE.Vector3();
+    const q = new THREE.Quaternion();
+    m.decompose(pos, q, new THREE.Vector3());
+    const e = new THREE.Euler().setFromQuaternion(q, "ZYX");
+    const g = r.geometry;
+    const geometry: Geometry =
+      g.type === "box"
+        ? { type: "box", size: [r6(g.size[0]), r6(g.size[1]), r6(g.size[2])] }
+        : g.type === "cylinder"
+          ? { type: "cylinder", radius: r6(g.radius), length: r6(g.length) }
+          : { type: "sphere", radius: r6(g.radius) };
+    return { origin: { xyz: [r6(pos.x), r6(pos.y), r6(pos.z)], rpy: [r6(e.x), r6(e.y), r6(e.z)] }, geometry, result: r };
+  });
+}
+
+export function applyFit(t: FitTarget, shapes: FittedShape[], output: FitOutput) {
+  if (!shapes.length) return;
+  // Replacing the collision being edited invalidates the edit target.
+  const st = s();
+  if (output === "replace_collision" && st.mode === "edit" && st.editTarget?.link === t.link && st.editTarget.role === "collision") exitEditMode();
+  const name = (i: number) => (shapes.length > 1 ? `fit_${i}` : null);
+  editRobot((r) => {
+    const l = r.links.find((x) => x.name === t.link)!;
+    if (output === "add_visual") {
+      const material = t.role === "visual" ? structuredClone(l.visuals[t.index]?.material ?? null) : null;
+      l.visuals.push(...shapes.map((sh, i) => ({ name: name(i), origin: sh.origin, geometry: sh.geometry, material })));
+      return;
+    }
+    const cols = shapes.map((sh, i) => ({ name: name(i), origin: sh.origin, geometry: sh.geometry }));
+    if (output === "add_collision") l.collisions.push(...cols);
+    else if (t.role === "collision") l.collisions.splice(t.index, 1, ...cols);
+    else l.collisions = cols;
+  });
+  if (output !== "add_visual") store.setState({ showCollision: true });
+  const what = output === "add_visual" ? "外观" : "碰撞体";
+  s().setStatus(`已${output === "replace_collision" ? "替换为" : "添加"} ${shapes.length} 个${what}${s().mode === "edit" ? "（对象模式下 Ctrl+Z 撤销）" : ""}`, "ok");
 }
 
 // --------------------------------------------------------------- edit mode

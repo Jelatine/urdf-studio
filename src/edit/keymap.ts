@@ -56,6 +56,7 @@ export const bindings: Binding[] = [
   b("Escape", "obj.gizmoOff", "object"),
   b("Space", "sim.play", "object"),
   b("KeyF", "view.selected", "object"),
+  b("KeyF", "obj.fit", "object", { shift: true, alt: true }),
   // edit mode: selection
   b("Digit1", "sel.vert", "edit"),
   b("Digit2", "sel.edge", "edit"),
@@ -95,6 +96,7 @@ export const bindings: Binding[] = [
   b("KeyV", "mesh.rip", "edit"),
   b("KeyY", "mesh.split", "edit"),
   b("KeyP", "mesh.separate", "edit"),
+  b("KeyF", "mesh.fit", "edit", { shift: true, alt: true }),
   b("KeyD", "mesh.duplicate", "edit", S),
   b("KeyT", "mesh.triangulate", "edit", C),
   b("KeyJ", "mesh.quads", "edit", A),

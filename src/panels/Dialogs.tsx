@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { separateSelection } from "../edit/meshOps";
 import { operators, runOp } from "../edit/operators";
-import { useStore, type ConfirmRequest } from "../state/store";
-import { writeUrdf } from "../wasm";
+import { applyFit, computeFit, type FitOutput, type FittedShape } from "../state/actions";
+import { useStore, type ConfirmRequest, type FitTarget } from "../state/store";
+import { writeUrdf, type FitOptions } from "../wasm";
+import { Check, Row, Select } from "./widgets";
 
-function Modal(props: { title: string; children: React.ReactNode; wide?: boolean }) {
+/** `floating` keeps the viewport visible and usable behind the dialog. */
+function Modal(props: { title: string; children: React.ReactNode; wide?: boolean; floating?: boolean }) {
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -16,7 +19,10 @@ function Modal(props: { title: string; children: React.ReactNode; wide?: boolean
     return () => window.removeEventListener("keydown", key, true);
   }, []);
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && useStore.setState({ dialog: null })}>
+    <div
+      className={`modal-backdrop ${props.floating ? "floating" : ""}`}
+      onMouseDown={(e) => e.target === e.currentTarget && useStore.setState({ dialog: null })}
+    >
       <div className={`modal ${props.wide ? "wide" : ""}`}>
         <div className="modal-title">
           {props.title}
@@ -142,6 +148,150 @@ function SeparateDialog() {
   );
 }
 
+type FitParams = Omit<FitOptions, "all" | "scale">;
+
+// Remembered between invocations of the dialog.
+let lastFit: { params: FitParams; output: FitOutput } = {
+  params: { shape: "auto", mode: "enclose", axis: "auto", aligned: false, per_island: false },
+  output: "add_collision",
+};
+
+const SHAPE_NAMES = { box: "立方体", cylinder: "圆柱", sphere: "球" };
+const FIT_ERRORS: Record<string, string> = { "nothing selected": "没有选中任何元素" };
+
+const num = (v: number) => `${+v.toPrecision(4)}`;
+
+function describe(g: FittedShape["geometry"]) {
+  if (g.type === "box") return `${SHAPE_NAMES.box} ${g.size.map(num).join(" × ")}`;
+  if (g.type === "cylinder") return `${SHAPE_NAMES.cylinder} 半径 ${num(g.radius)} · 长 ${num(g.length)}`;
+  if (g.type === "sphere") return `${SHAPE_NAMES.sphere} 半径 ${num(g.radius)}`;
+  return "";
+}
+
+function FitDialog({ target }: { target: FitTarget }) {
+  const meshVersion = useStore((s) => s.meshVersion);
+  const robot = useStore((s) => s.robot);
+  const [params, setParams] = useState(lastFit.params);
+  const [output, setOutput] = useState(lastFit.output);
+  const set = (p: Partial<FitParams>) => setParams((x) => ({ ...x, ...p }));
+  const fit = useMemo((): { shapes: FittedShape[]; error?: string } => {
+    try {
+      return { shapes: computeFit(target, params) };
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      return { shapes: [], error: FIT_ERRORS[m] ?? m };
+    }
+    // meshVersion: refit when the selection changes while the dialog is open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, params, meshVersion, robot]);
+  useEffect(() => {
+    useStore.setState({ fitPreview: fit.shapes.length ? { link: target.link, items: fit.shapes } : null });
+  }, [fit, target.link]);
+  useEffect(() => () => useStore.setState({ fitPreview: null }), []);
+  useEffect(() => {
+    lastFit = { params, output };
+  }, [params, output]);
+  const apply = () => {
+    if (!fit.shapes.length) return;
+    useStore.setState({ dialog: null });
+    applyFit(target, fit.shapes, output);
+  };
+  const applyRef = useRef(apply);
+  applyRef.current = apply;
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Enter" || e.target instanceof HTMLSelectElement) return;
+      e.preventDefault();
+      applyRef.current();
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, []);
+  const showCyl = params.shape === "auto" || params.shape === "cylinder";
+  const showBox = params.shape === "auto" || params.shape === "box";
+  const replaceLabel = target.role === "collision" ? `替换碰撞体 #${target.index}` : "替换该 link 的全部碰撞体";
+  return (
+    <Modal title="拟合基本形状" floating>
+      <div className="fit-source dim">
+        {target.link} · {target.role === "visual" ? "外观" : "碰撞"} #{target.index} · {target.all ? "整个网格" : "选中部分"}
+      </div>
+      <Row label="形状">
+        <Select
+          value={params.shape}
+          onChange={(shape) => set({ shape })}
+          options={[
+            { value: "auto", label: "自动 (选最合适的)" },
+            { value: "box", label: "立方体" },
+            { value: "cylinder", label: "圆柱" },
+            { value: "sphere", label: "球" },
+          ]}
+        />
+      </Row>
+      <Row label="方式" title="包围: 形状包含所有顶点，适合碰撞体；最小二乘: 贴合表面 (立方体始终为包围)">
+        <Select
+          value={params.mode}
+          onChange={(mode) => set({ mode })}
+          options={[
+            { value: "enclose", label: "包围 (包含所有顶点)" },
+            { value: "least_squares", label: "最小二乘 (贴合表面)" },
+          ]}
+        />
+      </Row>
+      {showCyl && (
+        <Row label="圆柱轴向">
+          <Select
+            value={params.axis}
+            onChange={(axis) => set({ axis })}
+            options={[
+              { value: "auto", label: "自动" },
+              { value: "x", label: "网格 X 轴" },
+              { value: "y", label: "网格 Y 轴" },
+              { value: "z", label: "网格 Z 轴" },
+            ]}
+          />
+        </Row>
+      )}
+      {showBox && (
+        <Row label="立方体">
+          <Check label="与网格坐标轴对齐" checked={params.aligned} onChange={(aligned) => set({ aligned })} />
+        </Row>
+      )}
+      <Row label="分块">
+        <Check label="每个相连部分单独拟合" checked={params.per_island} onChange={(per_island) => set({ per_island })} />
+      </Row>
+      <Row label="输出">
+        <Select
+          value={output}
+          onChange={setOutput}
+          options={[
+            { value: "add_collision", label: "添加为新的碰撞体" },
+            { value: "replace_collision", label: replaceLabel },
+            { value: "add_visual", label: "添加为外观" },
+          ]}
+        />
+      </Row>
+      <div className="fit-results">
+        {fit.error && <div className="fit-error">{fit.error}</div>}
+        {fit.shapes.slice(0, 20).map((sh, i) => (
+          <div key={i} className="fit-result">
+            <span>{describe(sh.geometry)}</span>
+            <span className="dim" title="顶点和面中心到形状表面的距离">
+              偏差 RMS {num(sh.result.rms)} · 最大 {num(sh.result.max_dev)}
+            </span>
+          </div>
+        ))}
+        {fit.shapes.length > 20 && <div className="dim">… 共 {fit.shapes.length} 个形状</div>}
+      </div>
+      <div className="fit-actions">
+        <button onClick={() => useStore.setState({ dialog: null })}>取消</button>
+        <button className="primary" disabled={!fit.shapes.length} onClick={apply}>
+          应用{fit.shapes.length > 1 ? ` (${fit.shapes.length})` : ""}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 function UrdfSourceDialog() {
   const robot = useStore((s) => s.robot);
   const text = useMemo(() => (robot ? writeUrdf(robot) : ""), [robot]);
@@ -201,7 +351,9 @@ function ConfirmDialog({ req }: { req: ConfirmRequest }) {
 export function Dialogs() {
   const dialog = useStore((s) => s.dialog);
   const confirm = useStore((s) => s.confirm);
+  const fitTarget = useStore((s) => s.fitTarget);
   if (confirm) return <ConfirmDialog req={confirm} />;
+  if (dialog === "fit" && fitTarget) return <FitDialog target={fitTarget} />;
   if (dialog === "search") return <SearchDialog />;
   if (dialog === "help") return <HelpDialog />;
   if (dialog === "separate") return <SeparateDialog />;

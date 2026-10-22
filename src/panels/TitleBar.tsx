@@ -28,7 +28,7 @@ const MENUS: { title: string; entries: Entry[]; mode?: "edit" | "object" }[] = [
     title: "视图",
     entries: ["view.all", "view.selected", "-", "view.front", "view.right", "view.top", "view.back", "view.left", "view.bottom", "view.ortho", "-", "view.xray", "view.wire", "view.collision"],
   },
-  { title: "对象", mode: "object", entries: ["obj.addLink", "obj.delete", "-", "obj.move", "obj.rotate", "obj.gizmoOff", "-", "sim.play"] },
+  { title: "对象", mode: "object", entries: ["obj.addLink", "obj.delete", "obj.fit", "-", "obj.move", "obj.rotate", "obj.gizmoOff", "-", "sim.play"] },
   {
     title: "选择",
     mode: "edit",
@@ -48,7 +48,7 @@ const MENUS: { title: string; entries: Entry[]; mode?: "edit" | "object" }[] = [
       "mesh.grab", "mesh.rotate", "mesh.scale", "mesh.mirror", "mesh.proportional", "-",
       "mesh.extrude", "mesh.extrudeInd", "mesh.inset", "mesh.duplicate", "mesh.fill", "mesh.fillTri", "mesh.bridge", "-",
       "mesh.loopcut", "mesh.subdivide", "mesh.bisect", "mesh.connect", "mesh.poke", "-",
-      "mesh.merge", "mesh.removeDoubles", "mesh.rip", "mesh.split", "mesh.separate", "-",
+      "mesh.merge", "mesh.removeDoubles", "mesh.rip", "mesh.split", "mesh.separate", "mesh.fit", "-",
       "mesh.delete", "mesh.dissolve", "mesh.limitedDissolve", "-",
       "mesh.triangulate", "mesh.quads", "mesh.smooth", "-",
       "mesh.flip", "mesh.normalsOut", "mesh.normalsIn", "-",

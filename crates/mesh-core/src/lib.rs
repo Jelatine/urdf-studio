@@ -7,6 +7,7 @@
 
 pub mod command;
 pub mod editor;
+pub mod fit;
 pub mod io;
 pub mod ops;
 pub mod pick;

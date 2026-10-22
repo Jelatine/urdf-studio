@@ -44,7 +44,7 @@ export function poseFromObject(o: THREE.Object3D): Pose {
   };
 }
 
-function primitiveGeometry(g: Geometry): THREE.BufferGeometry | null {
+export function primitiveGeometry(g: Geometry): THREE.BufferGeometry | null {
   switch (g.type) {
     case "box":
       return new THREE.BoxGeometry(g.size[0], g.size[1], g.size[2]);

@@ -31,3 +31,29 @@ export interface CmdOutput {
 
 /** A mesh-core command, e.g. `{ op: "inset", thickness: 0.1, depth: 0, individual: false }`. */
 export type Command = { op: string } & Record<string, unknown>;
+
+/** Options for `MeshEditor.fitPrimitives` (mirrors `mesh_core::fit::FitOptions`). */
+export interface FitOptions {
+  shape: "auto" | "box" | "cylinder" | "sphere";
+  mode: "enclose" | "least_squares";
+  axis: "auto" | "x" | "y" | "z";
+  aligned: boolean;
+  per_island: boolean;
+  all: boolean;
+  scale: [number, number, number];
+}
+
+export interface FitResult {
+  geometry:
+    | { type: "box"; size: [number, number, number] }
+    | { type: "cylinder"; radius: number; length: number }
+    | { type: "sphere"; radius: number };
+  /** In (scaled) mesh coordinates. */
+  center: [number, number, number];
+  /** Quaternion [x, y, z, w]. */
+  rotation: [number, number, number, number];
+  volume: number;
+  rms: number;
+  max_dev: number;
+  points: number;
+}
