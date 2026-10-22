@@ -45,6 +45,10 @@ src                  React + TypeScript + three.js frontend
 
 The frontend talks to the mesh kernel through serializable commands (`{op: "inset", thickness, …}`), which keeps the WASM boundary small and lets any operation be re-run with new parameters.
 
+## Download
+
+Windows portable builds are published on the [Releases](https://github.com/Jelatine/urdf-studio/releases) page: unzip and run `URDF Studio.exe` (needs the WebView2 runtime, preinstalled on Windows 10/11). Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds the zip and attaches it to a GitHub release.
+
 ## Development
 
 Requirements: Rust (stable), `wasm32-unknown-unknown` target, [`wasm-pack`](https://rustwasm.github.io/wasm-pack/), Node.js 20+.

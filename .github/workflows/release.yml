@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.0). Leave empty to only build the artifact."
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  windows-portable:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+      - run: npm ci
+      - run: npm run build:wasm
+      # Plain release executable, no installer: the frontend is embedded in the exe.
+      - run: npx tauri build --no-bundle
+
+      - name: Package portable zip
+        id: pkg
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          if (-not $tag -or $tag -eq "main") { $tag = "dev-$("${{ github.sha }}".Substring(0,7))" }
+          $name = "URDF-Studio-$tag-windows-x64-portable"
+          $dir = "dist-portable/$name"
+          New-Item -ItemType Directory -Force -Path "$dir/examples" | Out-Null
+          Copy-Item target/release/urdf-studio.exe "$dir/URDF Studio.exe"
+          Copy-Item README.md, LICENSE $dir
+          Copy-Item examples/demo_arm.zip "$dir/examples/"
+          @"
+          URDF Studio portable (Windows x64)
+
+          Run "URDF Studio.exe" directly, no installation needed.
+          Requires Microsoft Edge WebView2 Runtime (preinstalled on Windows 10/11).
+          If missing: https://developer.microsoft.com/microsoft-edge/webview2/
+          "@ | Set-Content -Encoding utf8 "$dir/PORTABLE.txt"
+          Compress-Archive -Path $dir -DestinationPath "dist-portable/$name.zip"
+          "name=$name" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pkg.outputs.name }}
+          path: dist-portable/${{ steps.pkg.outputs.name }}.zip
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.pkg.outputs.tag }}
+          name: URDF Studio ${{ steps.pkg.outputs.tag }}
+          generate_release_notes: true
+          files: dist-portable/${{ steps.pkg.outputs.name }}.zip
