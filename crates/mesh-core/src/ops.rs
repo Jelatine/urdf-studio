@@ -75,15 +75,17 @@ pub fn triangulate_all(m: &mut Mesh) {
 struct FaceFlags {
     sel: bool,
     hide: bool,
+    mat: u32,
 }
 
 impl Mesh {
     fn face_flags(&self, f: u32) -> FaceFlags {
-        FaceFlags { sel: self.faces[f as usize].sel, hide: self.faces[f as usize].hide }
+        let face = &self.faces[f as usize];
+        FaceFlags { sel: face.sel, hide: face.hide, mat: face.mat }
     }
 
     fn add_face_flags(&mut self, vs: &[u32], fl: &FaceFlags) -> Option<u32> {
-        let nf = self.add_face(vs)?;
+        let nf = self.add_face_mat(vs, fl.mat)?;
         self.faces[nf as usize].sel = fl.sel;
         self.faces[nf as usize].hide = fl.hide;
         Some(nf)
@@ -201,12 +203,13 @@ impl Mesh {
             return None;
         }
         let sel = region.iter().any(|&f| self.faces[f as usize].sel);
+        let mat = self.faces[region[0] as usize].mat;
         let saved: Vec<(Vec<u32>, FaceFlags)> =
             region.iter().map(|&f| (self.faces[f as usize].verts.clone(), self.face_flags(f))).collect();
         for &f in region {
             self.kill_face(f);
         }
-        match self.add_face(&loop_) {
+        match self.add_face_mat(&loop_, mat) {
             Some(nf) => {
                 self.faces[nf as usize].sel = sel;
                 self.kill_faceless_edges(region_edges);
@@ -454,7 +457,7 @@ impl Mesh {
         let mut new_faces = vec![];
         for &f in &sf {
             let vs: Vec<u32> = self.faces[f as usize].verts.iter().map(|v| vmap[v]).collect();
-            if let Some(nf) = self.add_face(&vs) {
+            if let Some(nf) = self.add_face_mat(&vs, self.faces[f as usize].mat) {
                 new_faces.push(nf);
             }
         }
@@ -509,7 +512,7 @@ impl Mesh {
         if sv.is_empty() {
             return Err(OpError::NothingSelected);
         }
-        let mut out = Mesh { select_mode: self.select_mode, ..Default::default() };
+        let mut out = Mesh { select_mode: self.select_mode, materials: self.materials.clone(), ..Default::default() };
         let mut vmap = HashMap::new();
         for &v in &sv {
             vmap.insert(v, out.add_vert(self.verts[v as usize].co));
@@ -520,7 +523,7 @@ impl Mesh {
         }
         for &f in &sf {
             let vs: Vec<u32> = self.faces[f as usize].verts.iter().map(|v| vmap[v]).collect();
-            out.add_face(&vs);
+            out.add_face_mat(&vs, self.faces[f as usize].mat);
         }
         self.delete_selected_faces_context(&sf, &se, &sv);
         // Separated geometry that was only selected loosely (vertex mode)
@@ -545,7 +548,7 @@ impl Mesh {
     fn extrude_faces(&mut self, region: &[u32]) -> (HashMap<u32, u32>, Vec<u32>) {
         let in_region: HashSet<u32> = region.iter().copied().collect();
         let mut vmap: HashMap<u32, u32> = HashMap::new();
-        let mut boundary: Vec<(u32, u32)> = Vec::new();
+        let mut boundary: Vec<(u32, u32, u32)> = Vec::new();
         let mut region_edges = HashSet::new();
         let mut polys = Vec::new();
         for &f in region {
@@ -556,7 +559,7 @@ impl Mesh {
                 region_edges.insert(e);
                 let cnt = self.edges[e as usize].faces.iter().filter(|g| in_region.contains(g)).count();
                 if cnt == 1 {
-                    boundary.push((face.verts[i], face.verts[(i + 1) % n]));
+                    boundary.push((face.verts[i], face.verts[(i + 1) % n], face.mat));
                 }
             }
             polys.push((face.verts.clone(), self.face_flags(f)));
@@ -579,8 +582,8 @@ impl Mesh {
                 new_faces.push(nf);
             }
         }
-        for (a, b) in boundary {
-            self.add_face(&[a, b, vmap[&b], vmap[&a]]);
+        for (a, b, mat) in boundary {
+            self.add_face_mat(&[a, b, vmap[&b], vmap[&a]], mat);
         }
         self.kill_faceless_edges(region_edges);
         let old: Vec<u32> = vmap.keys().copied().collect();
@@ -639,7 +642,8 @@ impl Mesh {
                 Some(f) if self.face_has_directed(f, a, b) => [b, a, na, nb],
                 _ => [a, b, nb, na],
             };
-            self.add_face(&quad);
+            let mat = f0.map_or(0, |f| self.faces[f as usize].mat);
+            self.add_face_mat(&quad, mat);
         }
         new_sel_verts.extend(emap.values().copied());
         for &v in &lone_verts {
@@ -791,14 +795,17 @@ impl Mesh {
         Ok(n)
     }
 
-    /// Adds a face whose winding agrees with existing neighbouring faces.
+    /// Adds a face whose winding (and material) agrees with existing
+    /// neighbouring faces.
     fn add_face_oriented(&mut self, loop_: &[u32]) -> Option<u32> {
         let n = loop_.len();
         let mut votes = 0i32;
+        let mut mat = None;
         for i in 0..n {
             let (a, b) = (loop_[i], loop_[(i + 1) % n]);
             if let Some(e) = self.find_edge(a, b) {
                 for &f in &self.edges[e as usize].faces {
+                    mat.get_or_insert(self.faces[f as usize].mat);
                     if self.face_has_directed(f, a, b) {
                         votes -= 1;
                     } else {
@@ -807,12 +814,13 @@ impl Mesh {
                 }
             }
         }
+        let mat = mat.unwrap_or(0);
         if votes < 0 {
             let mut r = loop_.to_vec();
             r.reverse();
-            self.add_face(&r)
+            self.add_face_mat(&r, mat)
         } else {
-            self.add_face(loop_)
+            self.add_face_mat(loop_, mat)
         }
     }
 
@@ -1422,9 +1430,11 @@ impl Mesh {
         // Orientation: the quad's edge a[i]->a[i+1] must run opposite to any
         // existing face on that edge.
         let mut flip = false;
+        let mut mat = 0;
         if let Some(e) = self.find_edge(a[0], a[1]) {
             if let Some(&f) = self.edges[e as usize].faces.first() {
                 flip = self.face_has_directed(f, a[0], a[1]);
+                mat = self.faces[f as usize].mat;
             }
         }
         for v in self.verts.iter_mut() {
@@ -1438,7 +1448,7 @@ impl Mesh {
             if flip {
                 quad.reverse();
             }
-            if let Some(f) = self.add_face(&quad) {
+            if let Some(f) = self.add_face_mat(&quad, mat) {
                 self.faces[f as usize].sel = true;
                 created += 1;
             }

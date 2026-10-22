@@ -69,6 +69,11 @@ function materialColor(robot: Robot, m: Material | null): THREE.Color {
   return DEFAULT_COLOR.clone();
 }
 
+/** Whether a mesh geometry carries per-face colors. */
+export function hasMeshColors(g: THREE.BufferGeometry | undefined) {
+  return !!g?.getAttribute("color");
+}
+
 export class RobotView {
   readonly root = new THREE.Group();
   links = new Map<string, THREE.Group>();
@@ -142,9 +147,13 @@ export class RobotView {
     for (const l of robot.links) {
       const frame = this.links.get(l.name)!;
       l.visuals.forEach((v, i) => {
-        const color = materialColor(robot, v.material);
+        // Meshes with their own colors (material slots) show those, like
+        // rviz does for colored meshes; the URDF material applies otherwise.
+        const own = v.geometry.type === "mesh" && hasMeshColors(getMesh(opts.meshPaths[v.geometry.filename])?.geometry);
+        const color = own ? new THREE.Color(1, 1, 1) : materialColor(robot, v.material);
         const mat = new THREE.MeshStandardMaterial({
           color,
+          vertexColors: own,
           metalness: 0.1,
           roughness: 0.65,
           wireframe: opts.wireframe,

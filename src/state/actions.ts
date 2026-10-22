@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { backend, type OpenedProject, type SaveMode } from "../io/project";
-import { addMesh, allMeshes, clearMeshes, getMesh, isModified, loadMesh, markSaved, modifiedFiles } from "../mesh/registry";
+import { addMesh, allMeshes, clearMeshes, getMesh, isModified, loadMesh, markSaved, meshFiles, modifiedFiles, type MeshFormat } from "../mesh/registry";
 import {
   childrenMap,
   isMovable,
@@ -14,7 +14,7 @@ import {
   type Pose,
   type Robot,
 } from "../types/urdf";
-import { MeshEditor, parseUrdf, resolveMesh, validateUrdf, writeUrdf, type FitOptions, type FitResult } from "../wasm";
+import { MeshEditor, parseUrdf, resolveMesh, siblingReference, validateUrdf, writeUrdf, type FitOptions, type FitResult } from "../wasm";
 import { redoStep, undoGroup, undoStep, type HistoryStep } from "./history";
 import { store, type ConfirmRequest, type EditTarget, type FitTarget, type ProjectInfo } from "./store";
 
@@ -225,12 +225,19 @@ export async function saveProject(mode: SaveMode): Promise<boolean> {
   try {
     store.setState({ busy: "正在保存…" });
     const urdfText = writeUrdf(robot);
-    const include = referencedMeshPaths();
+    const used = referencedMeshPaths();
     // Meshes no longer referenced (e.g. an undone separate) are not written.
-    const modified = new Map([...modifiedFiles()].filter(([p]) => include.has(p)));
+    const byMesh = [...modifiedFiles()].filter(([p]) => used.has(p));
+    const modified = new Map(byMesh.flatMap(([, files]) => [...files]));
+    // Companion files (OBJ material libraries) travel with their meshes.
+    const include = new Set([...used].flatMap((p) => {
+      const e = getMesh(p);
+      return e ? meshFiles(e) : [p];
+    }));
+    for (const p of modified.keys()) include.add(p);
     const saved = await backend.save({ urdfText, modified, include: [...include], remove: [], mode });
     if (!saved) return false;
-    markSaved([...modified.keys()]);
+    markSaved(byMesh.map(([p]) => p));
     const files = new Set(project.files);
     for (const p of modified.keys()) files.add(p);
     store.setState({ robotDirty: false, project: { ...project, files: [...files] }, meshVersion: s().meshVersion + 1 });
@@ -442,12 +449,12 @@ export function newMeshLocation(base: string): { path: string; reference: string
 }
 
 /** Registers a new mesh file (in memory until saved). */
-export function registerNewMesh(path: string, reference: string, editor: MeshEditor) {
-  addMesh(path, editor, "stl");
+export function registerNewMesh(path: string, reference: string, editor: MeshEditor, format: MeshFormat = "stl") {
+  addMesh(path, editor, format);
   const project = s().project!;
   store.setState({
     meshPaths: { ...s().meshPaths, [reference]: path },
-    meshInfo: { ...s().meshInfo, [path]: { status: "ready", format: "stl" } },
+    meshInfo: { ...s().meshInfo, [path]: { status: "ready", format } },
     project: { ...project, files: [...project.files, path] },
     meshVersion: s().meshVersion + 1,
   });
@@ -491,6 +498,39 @@ export function convertToMesh(link: string, role: "visual" | "collision", index:
     it.geometry = { type: "mesh", filename: reference, scale: null };
   });
   s().setStatus(`已转换为网格 ${path}（保存时写入）`, "ok");
+}
+
+/**
+ * Converts a mesh file to another format (STL / OBJ / DAE): writes a copy
+ * next to it (on save) and points every reference to the file at the copy.
+ * Material slots carry over as far as the target format allows.
+ */
+export function convertMeshFormat(reference: string, format: MeshFormat) {
+  const { project, meshPaths } = s();
+  const path = meshPaths[reference];
+  const entry = getMesh(path);
+  if (!project || !path || !entry) return;
+  if (entry.format === format) return;
+  if (s().mode === "edit") {
+    s().setStatus("请先退出编辑模式再转换格式", "error");
+    return;
+  }
+  const stem = path.replace(/\.[^./]+$/, "");
+  const taken = new Set([...project.files, ...allMeshes().map((m) => m.path)]);
+  let newPath = `${stem}.${format}`;
+  for (let i = 1; taken.has(newPath); i++) newPath = `${stem}_${i}.${format}`;
+  const newRef = siblingReference(reference, newPath.split("/").pop()!);
+  registerNewMesh(newPath, newRef, entry.editor.clone(), format);
+  editRobot((r) => {
+    for (const l of r.links) {
+      for (const it of [...l.visuals, ...l.collisions]) {
+        if (it.geometry.type === "mesh" && it.geometry.filename === reference) it.geometry.filename = newRef;
+      }
+    }
+  });
+  const colors = (entry.editor.materials() as unknown[]).length;
+  const note = colors && format === "stl" ? "，STL 仅保留颜色 (不含材质名与透明度)" : "";
+  s().setStatus(`已转换为 ${newPath}（保存时写入${note}）`, "ok");
 }
 
 // ------------------------------------------------------- primitive fitting

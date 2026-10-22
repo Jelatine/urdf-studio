@@ -9,6 +9,7 @@ pub mod command;
 pub mod editor;
 pub mod fit;
 pub mod io;
+pub mod material;
 pub mod ops;
 pub mod pick;
 pub mod primitives;
@@ -74,7 +75,19 @@ pub struct Face {
     pub sel: bool,
     pub hide: bool,
     pub alive: bool,
+    /// Index into [`Mesh::materials`] (out-of-range indices use the default color).
+    pub mat: u32,
 }
+
+/// A material slot: a named flat color (sRGB, as stored in mesh files).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MeshMaterial {
+    pub name: String,
+    pub color: [f32; 4],
+}
+
+/// Color of faces without a (valid) material.
+pub const DEFAULT_COLOR: [f32; 4] = [0.8, 0.8, 0.8, 1.0];
 
 #[derive(Clone, Debug, Default)]
 pub struct Mesh {
@@ -88,6 +101,9 @@ pub struct Mesh {
     pub active: Option<u32>,
     /// Previously active element, i.e. the one picked before `active`.
     pub prev_active: Option<u32>,
+    /// Material slots referenced by [`Face::mat`]. Empty for meshes without
+    /// colors (they are then drawn with the URDF material).
+    pub materials: Vec<MeshMaterial>,
 }
 
 #[inline]
@@ -118,7 +134,8 @@ impl Mesh {
 
     /// Builds a mesh from a triangle soup, welding vertices whose positions
     /// are closer than `weld_eps` (exact match when `weld_eps <= 0`).
-    pub fn from_triangles(positions: &[f32], indices: Option<&[u32]>, weld_eps: f64) -> Self {
+    /// `tri_mats` optionally gives each triangle's material slot.
+    pub fn from_triangles(positions: &[f32], indices: Option<&[u32]>, weld_eps: f64, tri_mats: Option<&[u32]>) -> Self {
         let n = positions.len() / 3;
         let raw: Vec<DVec3> = (0..n)
             .map(|i| {
@@ -139,7 +156,15 @@ impl Mesh {
                 .map(|t| vec![remap[t * 3], remap[t * 3 + 1], remap[t * 3 + 2]])
                 .collect(),
         };
-        let mut m = Mesh::from_polys(&pos, &tris);
+        let mut m = Mesh::new();
+        for p in &pos {
+            m.add_vert(*p);
+        }
+        for (t, tri) in tris.iter().enumerate() {
+            if let Some(f) = m.add_face(tri) {
+                m.faces[f as usize].mat = tri_mats.and_then(|tm| tm.get(t).copied()).unwrap_or(0);
+            }
+        }
         // Drop vertices that only belonged to degenerate triangles.
         for v in 0..m.verts.len() {
             if m.verts[v].edges.is_empty() {
@@ -216,8 +241,20 @@ impl Mesh {
             self.edges[e as usize].faces.push(f);
             edges.push(e);
         }
-        self.faces.push(Face { verts: loop_, edges, sel: false, hide: false, alive: true });
+        self.faces.push(Face { verts: loop_, edges, sel: false, hide: false, alive: true, mat: 0 });
         Some(f)
+    }
+
+    /// Adds a polygon with material slot `mat` (see [`Mesh::add_face`]).
+    pub fn add_face_mat(&mut self, vs: &[u32], mat: u32) -> Option<u32> {
+        let f = self.add_face(vs)?;
+        self.faces[f as usize].mat = mat;
+        Some(f)
+    }
+
+    /// Color of material slot `mat`, or the default color.
+    pub fn material_color(&self, mat: u32) -> [f32; 4] {
+        self.materials.get(mat as usize).map_or(DEFAULT_COLOR, |m| m.color)
     }
 
     pub fn kill_face(&mut self, f: u32) {
@@ -260,7 +297,7 @@ impl Mesh {
 
     /// Removes dead elements and renumbers everything densely.
     pub fn compact(&mut self) {
-        let mut m = Mesh { select_mode: self.select_mode, ..Default::default() };
+        let mut m = Mesh { select_mode: self.select_mode, materials: std::mem::take(&mut self.materials), ..Default::default() };
         let mut vmap = vec![u32::MAX; self.verts.len()];
         for (i, v) in self.verts.iter().enumerate() {
             if v.alive {
@@ -288,7 +325,7 @@ impl Mesh {
             if vs.iter().any(|&v| v == u32::MAX) {
                 continue;
             }
-            if let Some(nf) = m.add_face(&vs) {
+            if let Some(nf) = m.add_face_mat(&vs, f.mat) {
                 m.faces[nf as usize].sel = f.sel;
                 m.faces[nf as usize].hide = f.hide;
                 fmap[i] = nf;
@@ -576,7 +613,7 @@ mod tests {
     fn from_triangles_welds() {
         // Two triangles sharing an edge but with duplicated vertices.
         let pos = [0., 0., 0., 1., 0., 0., 1., 1., 0., 0., 0., 0., 1., 1., 0., 0., 1., 0.];
-        let m = Mesh::from_triangles(&pos, None, 0.0);
+        let m = Mesh::from_triangles(&pos, None, 0.0, None);
         assert_eq!(m.live_counts(), (4, 5, 2));
     }
 

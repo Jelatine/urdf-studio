@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import * as THREE from "three";
-import { getMesh } from "../mesh/registry";
-import { convertToMesh, editRobot, enterEditMode, openFitDialog, renameJoint, renameLink, updateJoint } from "../state/actions";
+import { adjustLast, runCmd } from "../edit/meshOps";
+import { getMesh, MESH_FORMATS, type MeshFormat, type MeshMaterial } from "../mesh/registry";
+import { convertMeshFormat, convertToMesh, editRobot, enterEditMode, openFitDialog, renameJoint, renameLink, updateJoint } from "../state/actions";
 import { useStore } from "../state/store";
 import { isMovable, jointRange, zeroPose, type Collision, type Geometry, type Joint, type JointType, type Link, type Material, type Pose, type Robot, type Visual } from "../types/urdf";
 import { getEngine } from "../viewport/engine";
@@ -134,7 +135,10 @@ function GeomItem(props: { link: Link; role: "visual" | "collision"; index: numb
     }, merge);
   const g = item.geometry;
   const meshPath = g.type === "mesh" ? meshPaths[g.filename] : null;
-  const editable = !!meshPath && !!getMesh(meshPath);
+  const entry = getMesh(meshPath);
+  const editable = !!entry;
+  useStore((st) => st.meshVersion); // re-render when the mesh's materials change
+  const meshColors = entry ? (entry.editor.materials() as MeshMaterial[]).length : 0;
   const editing = mode === "edit" && editTarget?.link === link.name && editTarget.role === role && editTarget.index === index;
   return (
     <Section
@@ -189,6 +193,20 @@ function GeomItem(props: { link: Link; role: "visual" | "collision"; index: numb
       </Row>
       <PoseFields pose={item.origin} onChange={(p, sc) => update((it) => (it.origin = p), sc)} />
       <GeometryFields g={g} onChange={(ng, sc) => update((it) => (it.geometry = ng), sc)} />
+      {g.type === "mesh" && entry && (
+        <Row label="文件格式" title="另存为其他格式并更新所有引用（保存项目时写入），颜色/材质随之转换">
+          <Select<MeshFormat>
+            value={entry.format}
+            options={MESH_FORMATS.map((f) => ({ value: f, label: f === entry.format ? f.toUpperCase() : `转换为 ${f.toUpperCase()}` }))}
+            onChange={(f) => convertMeshFormat(g.filename, f)}
+          />
+        </Row>
+      )}
+      {role === "visual" && meshColors > 0 && (
+        <div className="dim pad" title="网格文件自带的颜色优先于 URDF 材质（与 rviz 一致）；在编辑模式中修改">
+          网格自带 {meshColors} 种颜色，URDF 材质颜色不生效
+        </div>
+      )}
       {role === "visual" && (
         <MaterialFields robot={robot} m={(item as Visual).material} onChange={(m) => update((it) => ((it as Visual).material = m))} />
       )}
@@ -584,6 +602,87 @@ function RobotInspector({ robot }: { robot: Robot }) {
   );
 }
 
+const SLOT_PALETTE: [number, number, number][] = [
+  [0.85, 0.25, 0.2],
+  [0.2, 0.55, 0.85],
+  [0.3, 0.7, 0.3],
+  [0.95, 0.75, 0.2],
+  [0.6, 0.35, 0.75],
+  [0.15, 0.15, 0.17],
+];
+
+const toHex = (c: number[]) => `#${new THREE.Color().setRGB(c[0], c[1], c[2], THREE.SRGBColorSpace).getHexString()}`;
+
+function fromHex(hex: string, alpha: number): [number, number, number, number] {
+  const c = new THREE.Color(hex).getRGB({ r: 0, g: 0, b: 0 }, THREE.SRGBColorSpace);
+  return [c.r, c.g, c.b, alpha];
+}
+
+/** sRGB color the edited visual is currently displayed with (its URDF material). */
+function displayedColor(robot: Robot | null, link: string, role: "visual" | "collision", index: number): [number, number, number, number] | undefined {
+  if (role !== "visual" || !robot) return undefined;
+  const m = robot.links.find((l) => l.name === link)?.visuals[index]?.material;
+  const c = m?.color ?? robot.materials.find((x) => x.name === m?.name)?.color;
+  if (!c) return undefined;
+  const srgb = new THREE.Color(c[0], c[1], c[2]).getRGB({ r: 0, g: 0, b: 0 }, THREE.SRGBColorSpace);
+  return [srgb.r, srgb.g, srgb.b, c[3]];
+}
+
+/** Material slots of the edited mesh: per-face colors. */
+function MeshMaterials() {
+  const target = useStore((st) => st.editTarget);
+  const stats = useStore((st) => st.meshStats);
+  const robot = useStore((st) => st.robot);
+  useStore((st) => st.meshVersion);
+  const editor = getMesh(target?.meshPath)?.editor;
+  if (!target || !editor) return null;
+  const materials = editor.materials() as MeshMaterial[];
+  const canAssign = !!stats && stats.selFaces > 0;
+  const set = (index: number, name: string, color: [number, number, number, number]) => {
+    const cmd = { op: "set_material", index, name, color };
+    // Dragging in the color picker stays one undo step.
+    const last = s().lastOp?.cmd;
+    if (last?.op === "set_material" && last.index === index) adjustLast(cmd);
+    else runCmd(cmd, { label: "修改材质" });
+  };
+  const add = () => {
+    const [r, g, b] = SLOT_PALETTE[Math.max(0, materials.length - 1) % SLOT_PALETTE.length];
+    const out = runCmd(
+      { op: "add_material", name: `material_${materials.length || 1}`, color: [r, g, b, 1], base: displayedColor(robot, target.link, target.role, target.index) },
+      { label: "添加材质", noAdjust: true },
+    );
+    // Assign the new slot to the selected faces right away.
+    if (out?.count != null && canAssign) runCmd({ op: "assign_material", index: out.count }, { label: "指定材质", noAdjust: true });
+  };
+  return (
+    <Section title="材质槽 / 颜色" actions={<button className="small" onClick={add} title="新建颜色并指定给选中的面">+ 添加</button>}>
+      {materials.length === 0 ? (
+        <div className="dim pad">网格没有自带颜色（使用 URDF 材质）。选中面后点击“+ 添加”为其着色。</div>
+      ) : (
+        materials.map((m, i) => (
+          <div className="field-row material-slot" key={i}>
+            <input type="color" value={toHex(m.color)} onChange={(e) => set(i, m.name, fromHex(e.target.value, m.color[3]))} title="颜色" />
+            <TextField value={m.name} onChange={(name) => name && name !== m.name && runCmd({ op: "set_material", index: i, name, color: m.color }, { label: "重命名材质", noAdjust: true })} />
+            <button className="small" disabled={!canAssign} onClick={() => runCmd({ op: "assign_material", index: i }, { label: "指定材质", noAdjust: true })} title="把该颜色指定给选中的面">
+              指定
+            </button>
+            <button className="small" onClick={() => runCmd({ op: "select_material", index: i }, { label: "按材质选择", noAdjust: true })} title="选择使用该颜色的面 (加选)">
+              选择
+            </button>
+            <button
+              className="small"
+              onClick={() => runCmd({ op: "remove_material", index: i }, { label: "移除材质", noAdjust: true })}
+              title={materials.length === 1 ? "移除后网格改用 URDF 材质颜色" : "移除，使用它的面改用第一个材质"}
+            >
+              ✕
+            </button>
+          </div>
+        ))
+      )}
+    </Section>
+  );
+}
+
 function MeshInspector() {
   const stats = useStore((st) => st.meshStats);
   const target = useStore((st) => st.editTarget);
@@ -647,6 +746,7 @@ export function Inspector() {
   return (
     <div className="inspector">
       {mode === "edit" && <MeshInspector />}
+      {mode === "edit" && <MeshMaterials />}
       {link ? <LinkInspector robot={robot} link={link} /> : joint ? <JointInspector robot={robot} joint={joint} /> : <RobotInspector robot={robot} />}
     </div>
   );

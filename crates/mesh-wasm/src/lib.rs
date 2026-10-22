@@ -59,15 +59,28 @@ impl MeshEditor {
         Ok(Self::wrap(io::read_stl(bytes).map_err(js_err)?))
     }
 
+    /// `mtl`: contents of the file named by `mtllib` (see `objMtllibs`).
     #[wasm_bindgen(js_name = fromObj)]
-    pub fn from_obj(text: &str) -> Result<MeshEditor, JsError> {
-        Ok(Self::wrap(io::read_obj(text).map_err(js_err)?))
+    pub fn from_obj(text: &str, mtl: Option<String>) -> Result<MeshEditor, JsError> {
+        Ok(Self::wrap(io::read_obj(text, mtl.as_deref()).map_err(js_err)?))
     }
 
     /// Triangle soup (optionally indexed); coincident vertices are welded.
+    /// `tri_mats` gives each triangle's slot in `materials`
+    /// (`[{name, color: [r, g, b, a]}]`, sRGB).
     #[wasm_bindgen(js_name = fromTriangles)]
-    pub fn from_triangles(positions: &[f32], indices: Option<Vec<u32>>, weld_eps: f64) -> MeshEditor {
-        Self::wrap(Mesh::from_triangles(positions, indices.as_deref(), weld_eps))
+    pub fn from_triangles(
+        positions: &[f32],
+        indices: Option<Vec<u32>>,
+        weld_eps: f64,
+        tri_mats: Option<Vec<u32>>,
+        materials: JsValue,
+    ) -> Result<MeshEditor, JsError> {
+        let mut m = Mesh::from_triangles(positions, indices.as_deref(), weld_eps, tri_mats.as_deref());
+        if !materials.is_undefined() && !materials.is_null() {
+            m.materials = serde_wasm_bindgen::from_value(materials).map_err(js_err)?;
+        }
+        Ok(Self::wrap(m))
     }
 
     #[wasm_bindgen(js_name = empty)]
@@ -87,14 +100,40 @@ impl MeshEditor {
         io::write_stl(&self.ed.mesh, name)
     }
 
+    /// `mtllib`: file name of the `.mtl` written from `toMtl` (if any).
     #[wasm_bindgen(js_name = toObj)]
-    pub fn to_obj(&self, name: &str) -> String {
-        io::write_obj(&self.ed.mesh, name)
+    pub fn to_obj(&self, name: &str, mtllib: Option<String>) -> String {
+        io::write_obj(&self.ed.mesh, name, mtllib.as_deref())
+    }
+
+    /// The OBJ material library, or undefined when the mesh has no materials.
+    #[wasm_bindgen(js_name = toMtl)]
+    pub fn to_mtl(&self) -> Option<String> {
+        io::write_mtl(&self.ed.mesh)
     }
 
     #[wasm_bindgen(js_name = toDae)]
     pub fn to_dae(&self, name: &str) -> String {
         io::write_dae(&self.ed.mesh, name)
+    }
+
+    // ------------------------------------------------------------- materials
+
+    /// Material slots: `[{name, color: [r, g, b, a]}]` (sRGB).
+    pub fn materials(&self) -> Result<JsValue, JsError> {
+        to_js(&self.ed.mesh.materials)
+    }
+
+    /// Slot of each triangle of `objectTriPositions`.
+    #[wasm_bindgen(js_name = objectTriMaterials)]
+    pub fn object_tri_materials(&self) -> Vec<u32> {
+        self.ed.mesh.triangle_materials()
+    }
+
+    /// Slot of each triangle of the edit-mode buffers (`triPositions`).
+    #[wasm_bindgen(js_name = triMaterials)]
+    pub fn tri_materials(&self) -> Vec<u32> {
+        self.buf.tri_face.iter().map(|&f| self.ed.mesh.faces[f as usize].mat).collect()
     }
 
     // ------------------------------------------------------------------ info
@@ -489,6 +528,11 @@ pub fn urdf_candidates(paths: Vec<String>) -> Vec<String> {
 #[wasm_bindgen(js_name = resolveMesh)]
 pub fn resolve_mesh(urdf_path: &str, filename: &str, paths: Vec<String>) -> Option<String> {
     project_core::resolve_mesh(urdf_path, filename, &paths)
+}
+
+#[wasm_bindgen(js_name = objMtllibs)]
+pub fn obj_mtllibs(text: &str) -> Vec<String> {
+    io::obj_mtllibs(text)
 }
 
 #[wasm_bindgen(js_name = siblingReference)]

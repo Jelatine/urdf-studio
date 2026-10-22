@@ -13,7 +13,7 @@ import { store, type ParamSpec } from "../state/store";
 import { stepSimulation } from "../sim/simulation";
 import type { Command } from "../wasm";
 import { EditOverlay } from "./editOverlay";
-import { applyPose, poseFromObject, primitiveGeometry, RobotView, type GeomRef } from "./robotView";
+import { applyPose, hasMeshColors, poseFromObject, primitiveGeometry, RobotView, type GeomRef } from "./robotView";
 
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
 (THREE.BufferGeometry.prototype as unknown as Record<string, unknown>).computeBoundsTree = computeBoundsTree;
@@ -371,6 +371,11 @@ export class Engine {
         if (g.boundsTree) disposeBoundsTree.call(g);
       }
     }
+    // A mesh gained or lost its colors: visuals switch between them and the URDF material.
+    const stale = this.robotView.geoms.some(
+      (g) => g.role === "visual" && g.meshPath && (g.mesh.material as THREE.MeshStandardMaterial).vertexColors !== hasMeshColors(g.mesh.geometry),
+    );
+    if (stale) this.needsRebuild = true;
     this.refreshOverlay();
   }
 

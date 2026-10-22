@@ -60,6 +60,12 @@ pub enum Command {
     SelectInnerRegion,
     Hide { unselected: bool },
     Reveal { select: bool },
+    SelectMaterial { index: u32, #[serde(default)] deselect: bool },
+    // ---- materials
+    AddMaterial { name: String, color: [f32; 4], #[serde(default)] base: Option<[f32; 4]> },
+    SetMaterial { index: u32, name: String, color: [f32; 4] },
+    RemoveMaterial { index: u32 },
+    AssignMaterial { index: u32 },
     // ---- editing
     Delete { kind: DeleteKind },
     DissolveVerts,
@@ -164,6 +170,7 @@ impl Command {
                 | SelectInnerRegion
                 | Hide { .. }
                 | Reveal { .. }
+                | SelectMaterial { .. }
         )
     }
 
@@ -248,6 +255,17 @@ impl Command {
                 m.reveal(*select);
                 CmdOutput::default()
             }
+            SelectMaterial { index, deselect } => CmdOutput::count(m.select_material(*index, *deselect)),
+            AddMaterial { name, color, base } => CmdOutput::count(m.add_material(name, *color, *base) as usize),
+            SetMaterial { index, name, color } => {
+                m.set_material(*index, name, *color)?;
+                CmdOutput::default()
+            }
+            RemoveMaterial { index } => {
+                m.remove_material(*index)?;
+                CmdOutput::default()
+            }
+            AssignMaterial { index } => CmdOutput::count(m.assign_material(*index)?),
             Delete { kind } => {
                 m.delete(*kind)?;
                 CmdOutput::default()

@@ -3,6 +3,7 @@
 
 import * as THREE from "three";
 import { computeBoundsTree, disposeBoundsTree } from "three-mesh-bvh";
+import type { MeshMaterial } from "../mesh/registry";
 import type { MeshEditor } from "../wasm";
 
 const FACE = new THREE.Color(0.62, 0.64, 0.68);
@@ -23,6 +24,8 @@ export class EditOverlay {
   vertIds: Uint32Array = new Uint32Array();
   edgeIds: Uint32Array = new Uint32Array();
   faceIds: Uint32Array = new Uint32Array();
+  /** Per-triangle base color (material slots), or null for the plain gray. */
+  private triColors: THREE.Color[] | null = null;
   private faceMat: THREE.MeshStandardMaterial;
   private mode: "vert" | "edge" | "face" = "vert";
 
@@ -86,6 +89,13 @@ export class EditOverlay {
     this.vertIds = ed.vertIds();
     this.edgeIds = ed.edgeIds();
     this.faceIds = ed.faceIds();
+    const materials = ed.materials() as MeshMaterial[];
+    if (materials.length) {
+      const slots = materials.map((m) => new THREE.Color().setRGB(m.color[0], m.color[1], m.color[2], THREE.SRGBColorSpace));
+      this.triColors = Array.from(ed.triMaterials(), (m) => slots[m] ?? FACE);
+    } else {
+      this.triColors = null;
+    }
     const set = (geo: THREE.BufferGeometry, name: string, arr: Float32Array, size: number) => {
       geo.setAttribute(name, new THREE.BufferAttribute(arr, size));
     };
@@ -143,8 +153,10 @@ export class EditOverlay {
     const active = Number(ed.active());
     const triSel = ed.triSelection();
     const fc = this.faces.geometry.getAttribute("color") as THREE.BufferAttribute;
+    const tmp = new THREE.Color();
     for (let t = 0; t < triSel.length; t++) {
-      const c = triSel[t] ? FACE_SEL : FACE;
+      const base = this.triColors?.[t] ?? FACE;
+      const c = triSel[t] ? (this.triColors ? tmp.copy(base).lerp(FACE_SEL, 0.55) : FACE_SEL) : base;
       for (let k = 0; k < 3; k++) fc.setXYZ(t * 3 + k, c.r, c.g, c.b);
     }
     fc.needsUpdate = true;

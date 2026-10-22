@@ -79,6 +79,16 @@ impl Mesh {
         out
     }
 
+    /// Material slot of each triangle of [`Mesh::triangle_positions`].
+    pub fn triangle_materials(&self) -> Vec<u32> {
+        let mut out = Vec::new();
+        for f in self.faces.iter().filter(|f| f.alive) {
+            let pts: Vec<DVec3> = f.verts.iter().map(|&v| self.verts[v as usize].co).collect();
+            out.extend(std::iter::repeat_n(f.mat, triangulate_polygon(&pts).len()));
+        }
+        out
+    }
+
     /// Per-vertex position update without topology changes (used while
     /// dragging): returns positions in the same layout as `render_buffers`.
     pub fn positions_for(&self, b: &RenderBuffers) -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>) {

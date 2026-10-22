@@ -1003,3 +1003,11 @@ textarea.source {
   padding: 6px 12px;
   border-radius: 5px;
 }
+.material-slot input[type="color"] {
+  width: 28px;
+  flex-shrink: 0;
+}
+.material-slot .text-field {
+  flex: 1;
+  min-width: 0;
+}
