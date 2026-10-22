@@ -6,8 +6,8 @@
 //! candidate orientations); "least squares" fits cylinders and spheres to the
 //! surface instead. Boxes are always enclosing.
 
-use crate::ops::{OpError, OpResult};
-use crate::Mesh;
+use crate::ops::{append, DeleteKind, OpError, OpResult};
+use crate::{primitives, Mesh};
 use glam::{DMat3, DQuat, DVec2, DVec3};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -117,6 +117,39 @@ impl Mesh {
         };
         let scale = DVec3::from_array(o.scale);
         Ok(groups.iter().map(|g| fit_sample(&self.sample(g, o.all, scale), o)).collect())
+    }
+
+    /// Replaces the selection by meshes of the fitted shapes, which end up
+    /// selected. Returns the number of shapes.
+    pub fn fit_replace(&mut self, o: &FitOptions, segments: u32, rings: u32, keep_original: bool) -> OpResult<usize> {
+        let fits = self.fit_primitives(&FitOptions { all: false, ..o.clone() })?;
+        if !keep_original {
+            // Faces only when there are any, so that the surrounding faces
+            // sharing boundary vertices survive.
+            let kind = if self.selected_faces().is_empty() { DeleteKind::Verts } else { DeleteKind::Faces };
+            self.delete(kind)?;
+        }
+        // Shapes are fitted in scaled space; undo the scale so they look
+        // exact once the mesh is displayed with it.
+        let scale = DVec3::from_array(o.scale);
+        let inv = DVec3::select(scale.cmpeq(DVec3::ZERO), DVec3::ONE, DVec3::ONE / scale);
+        let mut all = Mesh::new();
+        for r in &fits {
+            let mut prim = primitive_mesh(&r.geometry, segments.max(3) as usize, rings.max(2) as usize);
+            let rot = DQuat::from_array(r.rotation);
+            let center = DVec3::from_array(r.center);
+            for v in prim.verts.iter_mut() {
+                v.co = (rot * v.co + center) * inv;
+            }
+            append(&mut all, &prim, DVec3::ZERO);
+        }
+        if inv.x * inv.y * inv.z < 0.0 {
+            for f in 0..all.faces.len() as u32 {
+                all.reverse_face(f);
+            }
+        }
+        self.add_mesh(&all, DVec3::ZERO);
+        Ok(fits.len())
     }
 
     /// Connected components of the `mask` vertices, following edges inside it.
@@ -230,6 +263,21 @@ fn sdf_box(q: DVec3, h: DVec3) -> f64 {
 fn sdf_box2(q: DVec2, h: DVec2) -> f64 {
     let d = q.abs() - h;
     d.max(DVec2::ZERO).length() + d.max_element().min(0.0)
+}
+
+/// Mesh of a fitted shape at the origin (cylinders along Z).
+fn primitive_mesh(g: &FitGeometry, segments: usize, rings: usize) -> Mesh {
+    match *g {
+        FitGeometry::Box { size } => {
+            let mut m = primitives::cube(1.0);
+            for v in m.verts.iter_mut() {
+                v.co *= DVec3::from_array(size);
+            }
+            m
+        }
+        FitGeometry::Cylinder { radius, length } => primitives::cylinder(segments, radius, length),
+        FitGeometry::Sphere { radius } => primitives::uv_sphere(segments, rings, radius),
+    }
 }
 
 // --------------------------------------------------------------------- box
@@ -829,6 +877,31 @@ mod tests {
         close(rs[1].center[0], 6.0, 1e-9);
         m.select_all(SelectAction::Deselect);
         assert_eq!(m.fit_primitives(&o), Err(OpError::NothingSelected));
+    }
+
+    #[test]
+    fn replace_selection_with_shape() {
+        // A cylinder (with caps) next to a cube; replace only the cylinder.
+        let mut m = rotated(primitives::cylinder(24, 0.3, 1.0), DVec3::ZERO);
+        m.select_all(SelectAction::Deselect);
+        m.add_mesh(&primitives::cube(0.5), DVec3::new(2.0, 0.0, 0.0));
+        m.select_all(SelectAction::Invert);
+        let o = FitOptions { shape: FitShape::Cylinder, scale: [1.0, 1.0, 2.0], ..Default::default() };
+        assert_eq!(m.fit_replace(&o, 32, 8, false).unwrap(), 1);
+        m.validate().unwrap();
+        // cube (8 verts) + new 32-segment cylinder (64 verts), new part selected
+        assert_eq!(m.live_counts().0, 8 + 64);
+        assert_eq!(m.selected_counts().0, 64);
+        // Refitting the generated mesh gives the same cylinder back.
+        let again = m.fit_primitives(&o).unwrap().remove(0);
+        let FitGeometry::Cylinder { radius, .. } = again.geometry else { panic!() };
+        let first = rotated(primitives::cylinder(24, 0.3, 1.0), DVec3::ZERO).fit_primitives(&FitOptions { all: true, ..o.clone() }).unwrap().remove(0);
+        let FitGeometry::Cylinder { radius: r0, .. } = first.geometry else { panic!() };
+        close(radius, r0, 1e-6);
+        // Keeping the original adds instead.
+        let n = m.live_counts().0;
+        m.fit_replace(&FitOptions { shape: FitShape::Box, ..Default::default() }, 32, 8, true).unwrap();
+        assert_eq!(m.live_counts().0, n + 8);
     }
 
     #[test]

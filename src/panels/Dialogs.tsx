@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { separateSelection } from "../edit/meshOps";
+import { FIT_AXES, FIT_MODES, FIT_SHAPES, fitReplaceInMesh, separateSelection } from "../edit/meshOps";
 import { operators, runOp } from "../edit/operators";
 import { applyFit, computeFit, type FitOutput, type FittedShape } from "../state/actions";
 import { useStore, type ConfirmRequest, type FitTarget } from "../state/store";
 import { writeUrdf, type FitOptions } from "../wasm";
-import { Check, Row, Select } from "./widgets";
+import { Check, NumField, Row, Select } from "./widgets";
 
 /** `floating` keeps the viewport visible and usable behind the dialog. */
 function Modal(props: { title: string; children: React.ReactNode; wide?: boolean; floating?: boolean }) {
@@ -151,9 +151,10 @@ function SeparateDialog() {
 type FitParams = Omit<FitOptions, "all" | "scale">;
 
 // Remembered between invocations of the dialog.
-let lastFit: { params: FitParams; output: FitOutput } = {
+let lastFit: { params: FitParams; output: FitOutput; segments: number } = {
   params: { shape: "auto", mode: "enclose", axis: "auto", aligned: false, per_island: false },
   output: "add_collision",
+  segments: 32,
 };
 
 const SHAPE_NAMES = { box: "立方体", cylinder: "圆柱", sphere: "球" };
@@ -173,6 +174,12 @@ function FitDialog({ target }: { target: FitTarget }) {
   const robot = useStore((s) => s.robot);
   const [params, setParams] = useState(lastFit.params);
   const [output, setOutput] = useState(lastFit.output);
+  const [segments, setSegments] = useState(lastFit.segments);
+  const editTarget = useStore((s) => (s.mode === "edit" ? s.editTarget : null));
+  // In-mesh replacement only applies to the selection of the mesh being edited.
+  const canReplaceMesh =
+    !target.all && editTarget?.link === target.link && editTarget.role === target.role && editTarget.index === target.index;
+  const out: FitOutput = output === "replace_mesh" && !canReplaceMesh ? "add_collision" : output;
   const set = (p: Partial<FitParams>) => setParams((x) => ({ ...x, ...p }));
   const fit = useMemo((): { shapes: FittedShape[]; error?: string } => {
     try {
@@ -189,12 +196,13 @@ function FitDialog({ target }: { target: FitTarget }) {
   }, [fit, target.link]);
   useEffect(() => () => useStore.setState({ fitPreview: null }), []);
   useEffect(() => {
-    lastFit = { params, output };
-  }, [params, output]);
+    lastFit = { params, output, segments };
+  }, [params, output, segments]);
   const apply = () => {
     if (!fit.shapes.length) return;
     useStore.setState({ dialog: null });
-    applyFit(target, fit.shapes, output);
+    if (out === "replace_mesh") fitReplaceInMesh(params, segments);
+    else applyFit(target, fit.shapes, out);
   };
   const applyRef = useRef(apply);
   applyRef.current = apply;
@@ -219,22 +227,14 @@ function FitDialog({ target }: { target: FitTarget }) {
         <Select
           value={params.shape}
           onChange={(shape) => set({ shape })}
-          options={[
-            { value: "auto", label: "自动 (选最合适的)" },
-            { value: "box", label: "立方体" },
-            { value: "cylinder", label: "圆柱" },
-            { value: "sphere", label: "球" },
-          ]}
+          options={[...FIT_SHAPES]}
         />
       </Row>
       <Row label="方式" title="包围: 形状包含所有顶点，适合碰撞体；最小二乘: 贴合表面 (立方体始终为包围)">
         <Select
           value={params.mode}
           onChange={(mode) => set({ mode })}
-          options={[
-            { value: "enclose", label: "包围 (包含所有顶点)" },
-            { value: "least_squares", label: "最小二乘 (贴合表面)" },
-          ]}
+          options={[...FIT_MODES]}
         />
       </Row>
       {showCyl && (
@@ -242,12 +242,7 @@ function FitDialog({ target }: { target: FitTarget }) {
           <Select
             value={params.axis}
             onChange={(axis) => set({ axis })}
-            options={[
-              { value: "auto", label: "自动" },
-              { value: "x", label: "网格 X 轴" },
-              { value: "y", label: "网格 Y 轴" },
-              { value: "z", label: "网格 Z 轴" },
-            ]}
+            options={[...FIT_AXES]}
           />
         </Row>
       )}
@@ -261,15 +256,21 @@ function FitDialog({ target }: { target: FitTarget }) {
       </Row>
       <Row label="输出">
         <Select
-          value={output}
+          value={out}
           onChange={setOutput}
           options={[
             { value: "add_collision", label: "添加为新的碰撞体" },
             { value: "replace_collision", label: replaceLabel },
             { value: "add_visual", label: "添加为外观" },
+            ...(canReplaceMesh ? [{ value: "replace_mesh" as const, label: "在网格内替换选中部分" }] : []),
           ]}
         />
       </Row>
+      {out === "replace_mesh" && params.shape !== "box" && (
+        <Row label="段数" title="生成的圆柱 / 球网格的分段数">
+          <NumField value={segments} min={3} max={256} step={1} int onChange={(v) => setSegments(Math.round(v))} />
+        </Row>
+      )}
       <div className="fit-results">
         {fit.error && <div className="fit-error">{fit.error}</div>}
         {fit.shapes.slice(0, 20).map((sh, i) => (

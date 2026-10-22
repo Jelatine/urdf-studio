@@ -4,7 +4,7 @@ import { getMesh, type MeshEntry } from "../mesh/registry";
 import { editRobot, newMeshLocation, registerNewMesh } from "../state/actions";
 import { store, type ParamSpec } from "../state/store";
 import { uniqueName } from "../types/urdf";
-import type { CmdOutput, Command, MeshStats } from "../wasm";
+import type { CmdOutput, Command, FitOptions, MeshStats } from "../wasm";
 
 const s = () => store.getState();
 
@@ -141,4 +141,45 @@ export function separateSelection(asNewLink: boolean) {
   store.setState({ lastOp: null });
   meshChanged();
   s().setStatus(`已分离到 ${path}${asNewLink ? "（新 link）" : ""}`, "ok");
+}
+
+export const FIT_SHAPES = [
+  { value: "auto", label: "自动 (选最合适的)" },
+  { value: "box", label: "立方体" },
+  { value: "cylinder", label: "圆柱" },
+  { value: "sphere", label: "球" },
+] as const;
+export const FIT_MODES = [
+  { value: "enclose", label: "包围 (包含所有顶点)" },
+  { value: "least_squares", label: "最小二乘 (贴合表面)" },
+] as const;
+export const FIT_AXES = [
+  { value: "auto", label: "自动" },
+  { value: "x", label: "网格 X 轴" },
+  { value: "y", label: "网格 Y 轴" },
+  { value: "z", label: "网格 Z 轴" },
+] as const;
+
+/** Replaces the selection of the edited mesh by fitted primitive meshes. */
+export function fitReplaceInMesh(params: Omit<FitOptions, "all" | "scale">, segments: number) {
+  const t = s().editTarget;
+  const link = s().robot?.links.find((l) => l.name === t?.link);
+  const item = t && (t.role === "visual" ? link?.visuals[t.index] : link?.collisions[t.index]);
+  const scale = item?.geometry.type === "mesh" ? item.geometry.scale ?? [1, 1, 1] : [1, 1, 1];
+  runCmd(
+    { op: "fit_primitive", ...params, segments, rings: Math.max(2, Math.round(segments / 2)), keep_original: false, scale },
+    {
+      label: "拟合替换",
+      params: [
+        { key: "shape", label: "形状", type: "enum", options: [...FIT_SHAPES] },
+        { key: "mode", label: "方式", type: "enum", options: [...FIT_MODES] },
+        { key: "axis", label: "圆柱轴向", type: "enum", options: [...FIT_AXES] },
+        { key: "aligned", label: "立方体对齐坐标轴", type: "bool" },
+        { key: "per_island", label: "每部分单独拟合", type: "bool" },
+        { key: "segments", label: "段数", type: "int", min: 3, max: 256, step: 1 },
+        { key: "rings", label: "环数", type: "int", min: 2, max: 128, step: 1 },
+        { key: "keep_original", label: "保留原几何", type: "bool" },
+      ],
+    },
+  );
 }

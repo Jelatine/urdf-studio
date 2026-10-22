@@ -454,8 +454,11 @@ export interface FittedShape {
   result: FitResult;
 }
 
-/** "replace" replaces the target collision, or all of the link's collisions when fitting a visual. */
-export type FitOutput = "add_collision" | "replace_collision" | "add_visual";
+/**
+ * "replace_collision" replaces the target collision, or all of the link's collisions when fitting a visual.
+ * "replace_mesh" replaces the selection inside the edited mesh (handled by `fitReplaceInMesh`).
+ */
+export type FitOutput = "add_collision" | "replace_collision" | "add_visual" | "replace_mesh";
 
 const r6 = (v: number) => Math.round(v * 1e6) / 1e6 || 0;
 
@@ -512,7 +515,7 @@ export function computeFit(t: FitTarget, opts: Omit<FitOptions, "all" | "scale">
   });
 }
 
-export function applyFit(t: FitTarget, shapes: FittedShape[], output: FitOutput) {
+export function applyFit(t: FitTarget, shapes: FittedShape[], output: Exclude<FitOutput, "replace_mesh">) {
   if (!shapes.length) return;
   // Replacing the collision being edited invalidates the edit target.
   const st = s();

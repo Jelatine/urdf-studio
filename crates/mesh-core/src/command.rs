@@ -3,6 +3,7 @@
 //! re-runnable with new parameters ("Adjust Last Operation").
 
 use crate::editor::Editor;
+use crate::fit::{FitAxis, FitMode, FitOptions, FitShape};
 use crate::ops::{DeleteKind, MergeKind, OpResult};
 use crate::select::{Compare, SelectAction, SelectOp, SimilarType};
 use crate::{primitives, ElemKind, Mesh, SelectMode};
@@ -29,6 +30,9 @@ fn d_seg() -> u32 {
 }
 fn d_rings() -> u32 {
     8
+}
+fn d_scale() -> [f64; 3] {
+    [1.0; 3]
 }
 
 /// Angles are in degrees.
@@ -95,6 +99,28 @@ pub enum Command {
         rings: u32,
         #[serde(default)]
         offset: [f64; 3],
+    },
+    /// Replaces the selection by fitted box/cylinder/sphere meshes.
+    FitPrimitive {
+        #[serde(default)]
+        shape: FitShape,
+        #[serde(default)]
+        mode: FitMode,
+        #[serde(default)]
+        axis: FitAxis,
+        #[serde(default)]
+        aligned: bool,
+        #[serde(default)]
+        per_island: bool,
+        #[serde(default = "d_seg")]
+        segments: u32,
+        #[serde(default = "d_rings")]
+        rings: u32,
+        #[serde(default)]
+        keep_original: bool,
+        /// Display scale of the mesh, so shapes fit what the user sees.
+        #[serde(default = "d_scale")]
+        scale: [f64; 3],
     },
 }
 
@@ -315,6 +341,18 @@ impl Command {
                 m.add_mesh(&prim, DVec3::from_array(*offset));
                 CmdOutput::default()
             }
+            FitPrimitive { shape, mode, axis, aligned, per_island, segments, rings, keep_original, scale } => {
+                let o = FitOptions {
+                    shape: *shape,
+                    mode: *mode,
+                    axis: *axis,
+                    aligned: *aligned,
+                    per_island: *per_island,
+                    all: false,
+                    scale: *scale,
+                };
+                CmdOutput::count(m.fit_replace(&o, *segments, *rings, *keep_original)?)
+            }
         })
     }
 }
@@ -377,6 +415,8 @@ mod tests {
         let flat: Command = serde_json_parse(r#"{"op":"select_linked_flat","angle":1}"#);
         assert!(flat.is_selection());
         assert_eq!(Command::DissolveLimited { angle: 1.0 }.label(), "Dissolve Limited");
+        let fit: Command = serde_json_parse(r#"{"op":"fit_primitive","shape":"sphere","mode":"least_squares"}"#);
+        assert!(matches!(fit, Command::FitPrimitive { segments: 16, scale: [1.0, 1.0, 1.0], .. }));
     }
 
     #[test]
