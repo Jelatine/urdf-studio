@@ -15,5 +15,15 @@ roxmltree = "0.20"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 thiserror = "1"
 
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.debugging]
+inherits = "dev"
+debug = true
+
 [profile.release.package.mesh-wasm]
 opt-level = 3
