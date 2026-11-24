@@ -10,7 +10,7 @@ use crate::ops::{append, DeleteKind, OpError, OpResult};
 use crate::{primitives, Mesh};
 use glam::{DMat3, DQuat, DVec2, DVec3};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::f64::consts::PI;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -56,6 +56,8 @@ pub struct FitOptions {
     pub per_island: bool,
     /// Fit the whole (visible) mesh instead of the selection.
     pub all: bool,
+    /// Fit these faces without changing the active selection.
+    pub face_ids: Option<Vec<u32>>,
     /// Per-axis scale applied to the vertices first (the URDF mesh scale).
     pub scale: [f64; 3],
 }
@@ -69,6 +71,7 @@ impl Default for FitOptions {
             aligned: false,
             per_island: false,
             all: false,
+            face_ids: None,
             scale: [1.0; 3],
         }
     }
@@ -106,7 +109,24 @@ struct Sample {
 
 impl Mesh {
     pub fn fit_primitives(&self, o: &FitOptions) -> OpResult<Vec<FitResult>> {
-        let mask: Vec<bool> = self.verts.iter().map(|v| v.alive && !v.hide && (o.all || v.sel)).collect();
+        let faces = o.face_ids.as_ref().map(|ids| {
+            ids.iter()
+                .copied()
+                .filter(|&id| self.faces.get(id as usize).is_some_and(|f| f.alive && !f.hide))
+                .collect::<HashSet<_>>()
+        });
+        let mask: Vec<bool> = if let Some(faces) = &faces {
+            let mut mask = vec![false; self.verts.len()];
+            for &id in faces {
+                for &id in &self.faces[id as usize].verts {
+                    let v = &self.verts[id as usize];
+                    mask[id as usize] = v.alive && !v.hide;
+                }
+            }
+            mask
+        } else {
+            self.verts.iter().map(|v| v.alive && !v.hide && (o.all || v.sel)).collect()
+        };
         if !mask.iter().any(|&b| b) {
             return Err(OpError::NothingSelected);
         }
@@ -116,7 +136,7 @@ impl Mesh {
             vec![(0..self.verts.len() as u32).filter(|&v| mask[v as usize]).collect()]
         };
         let scale = DVec3::from_array(o.scale);
-        Ok(groups.iter().map(|g| fit_sample(&self.sample(g, o.all, scale), o)).collect())
+        Ok(groups.iter().map(|g| fit_sample(&self.sample(g, o.all, faces.as_ref(), scale), o)).collect())
     }
 
     /// Replaces the selection by meshes of the fitted shapes, which end up
@@ -178,12 +198,13 @@ impl Mesh {
         out
     }
 
-    fn sample(&self, verts: &[u32], all: bool, scale: DVec3) -> Sample {
+    fn sample(&self, verts: &[u32], all: bool, face_ids: Option<&HashSet<u32>>, scale: DVec3) -> Sample {
         let index: HashMap<u32, usize> = verts.iter().enumerate().map(|(i, &v)| (v, i)).collect();
         let pts: Vec<DVec3> = verts.iter().map(|&v| self.verts[v as usize].co * scale).collect();
         let mut faces = Vec::new();
-        for f in &self.faces {
-            if !f.alive || f.hide || !(all || f.sel) {
+        for (id, f) in self.faces.iter().enumerate() {
+            let included = face_ids.map_or(all || f.sel, |ids| ids.contains(&(id as u32)));
+            if !f.alive || f.hide || !included {
                 continue;
             }
             let Some(ids) = f.verts.iter().map(|v| index.get(v).copied()).collect::<Option<Vec<usize>>>() else {
@@ -877,6 +898,28 @@ mod tests {
         close(rs[1].center[0], 6.0, 1e-9);
         m.select_all(SelectAction::Deselect);
         assert_eq!(m.fit_primitives(&o), Err(OpError::NothingSelected));
+    }
+
+    #[test]
+    fn explicit_face_fit_preserves_vertex_and_edge_selection() {
+        let mut mesh = primitives::cube(1.0);
+        mesh.select_elems(crate::ElemKind::Edge, &[0], crate::select::SelectOp::Set);
+        mesh.select_elems(crate::ElemKind::Vert, &[7], crate::select::SelectOp::Add);
+        let verts = mesh.selected_verts();
+        let edges = mesh.selected_edges();
+        let faces = mesh.selected_faces();
+        assert!(!verts.is_empty() && !edges.is_empty() && faces.is_empty());
+
+        let opts = FitOptions {
+            shape: FitShape::Box,
+            face_ids: Some(vec![0]),
+            ..Default::default()
+        };
+        let result = mesh.fit_primitives(&opts).unwrap();
+        assert_eq!(result[0].points, mesh.faces[0].verts.len());
+        assert_eq!(mesh.selected_verts(), verts);
+        assert_eq!(mesh.selected_edges(), edges);
+        assert_eq!(mesh.selected_faces(), faces);
     }
 
     #[test]

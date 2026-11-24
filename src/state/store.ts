@@ -84,12 +84,13 @@ export type FeatureConstraint = "parallel" | "collinear" | "concentric" | "axisA
 
 export type FeatureKind = "line" | "point" | "circle";
 
-/** A world-space geometric feature picked for alignment. */
+/** A link-local geometric feature picked for alignment. */
 export interface FeaturePick {
   kind: FeatureKind;
-  /** World-space point (line point / circle center / vertex). */
+  link: string;
+  /** Link-local point (line point / circle center / vertex). */
   origin: [number, number, number];
-  /** World-space unit direction (line / circle axis); zero for plain points. */
+  /** Link-local unit direction (line / circle axis); zero for plain points. */
   direction: [number, number, number];
   label: string;
 }

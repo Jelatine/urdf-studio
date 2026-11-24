@@ -40,6 +40,7 @@ export interface FitOptions {
   aligned: boolean;
   per_island: boolean;
   all: boolean;
+  face_ids?: number[];
   scale: [number, number, number];
 }
 

@@ -368,6 +368,7 @@ impl Command {
                     per_island: *per_island,
                     all: false,
                     scale: *scale,
+                    face_ids: None,
                 };
                 CmdOutput::count(m.fit_replace(&o, *segments, *rings, *keep_original)?)
             }

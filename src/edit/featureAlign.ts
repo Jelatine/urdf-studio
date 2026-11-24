@@ -1,7 +1,7 @@
 // Closed-form feature constraints that rewrite a joint origin / axis.
 
 import * as THREE from "three";
-import { axisInParent, poseToMatrix, remapJointAxis, rotateOriginAlign, translateOrigin } from "../math/jointPose";
+import { axisInParent, poseToMatrix, rotateOriginAlign, translateOrigin } from "../math/jointPose";
 import type { FeatureAlignState, FeaturePick } from "../state/store";
 import { store } from "../state/store";
 import type { Joint, Robot } from "../types/urdf";
@@ -35,7 +35,10 @@ function jointOriginWorld(joint: Joint): THREE.Matrix4 {
  * Apply the constraint described by `fa` onto the live robot.
  * Returns false when inputs are invalid.
  */
-export function applyFeatureConstraint(fa: FeatureAlignState): boolean {
+export function applyFeatureConstraint(
+  fa: FeatureAlignState,
+  remapAxis: (name: string, direction: THREE.Vector3) => boolean,
+): boolean {
   const st = store.getState();
   const robot = st.robot;
   if (!robot) return false;
@@ -45,17 +48,21 @@ export function applyFeatureConstraint(fa: FeatureAlignState): boolean {
     return false;
   }
 
-  const picks = fa.picks;
+  const picks = fa.picks.map(featureInWorld);
+  if (picks.some((pick) => pick === null)) {
+    st.setStatus("找不到所选特征的 link", "error");
+    return false;
+  }
   try {
     switch (fa.constraint) {
       case "axisAlign":
-        return applyAxisAlign(robot, joint, picks[0]);
+        return applyAxisAlign(joint, picks[0]!, remapAxis);
       case "parallel":
-        return applyParallel(robot, joint, picks[0], picks[1]);
+        return applyParallel(robot, joint, picks[0]!, picks[1]!);
       case "collinear":
-        return applyCollinear(robot, joint, picks[0], picks[1]);
+        return applyCollinear(robot, joint, picks[0]!, picks[1]!);
       case "concentric":
-        return applyConcentric(robot, joint, picks[0], picks[1]);
+        return applyConcentric(robot, joint, picks[0]!, picks[1]!);
       default:
         return false;
     }
@@ -69,7 +76,11 @@ function commit(fn: (r: Robot) => void) {
   store.getState().editRobot(fn, { snapJoints: true });
 }
 
-function applyAxisAlign(_robot: Robot, joint: Joint, line: FeaturePick): boolean {
+function applyAxisAlign(
+  joint: Joint,
+  line: FeaturePick,
+  remapAxis: (name: string, direction: THREE.Vector3) => boolean,
+): boolean {
   if (line.kind !== "line" && line.kind !== "circle") {
     store.getState().setStatus("轴对齐需要一条直线或圆轴", "error");
     return false;
@@ -82,12 +93,7 @@ function applyAxisAlign(_robot: Robot, joint: Joint, line: FeaturePick): boolean
   // Prefer direction closer to current axis (avoid 180° flips).
   const cur = axisInParent(joint);
   if (cur.dot(dirParent) < 0) dirParent.negate();
-  commit((r) => {
-    const j = r.joints.find((x) => x.name === joint.name);
-    if (!j) return;
-    remapJointAxis(r, j, dirParent);
-  });
-  return true;
+  return remapAxis(joint.name, dirParent);
 }
 
 function applyParallel(_robot: Robot, joint: Joint, moving: FeaturePick, reference: FeaturePick): boolean {
@@ -147,6 +153,16 @@ function applyConcentric(_robot: Robot, joint: Joint, moving: FeaturePick, refer
     j.origin = translateOrigin(j.origin, deltaParent);
   });
   return true;
+}
+
+/** Resolve a link-local pick against the current robot pose. */
+export function featureInWorld(pick: FeaturePick): FeaturePick | null {
+  const link = getEngine()?.robotView.links.get(pick.link);
+  if (!link) return null;
+  link.updateWorldMatrix(true, false);
+  const origin = v3(pick.origin).applyMatrix4(link.matrixWorld);
+  const direction = v3(pick.direction).transformDirection(link.matrixWorld);
+  return { ...pick, origin: origin.toArray(), direction: direction.toArray() };
 }
 
 /** Project a world point onto the closest point of a feature for preview. */

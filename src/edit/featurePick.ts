@@ -7,6 +7,7 @@ import type { FitResult } from "../wasm";
 import type { GeomRef } from "../viewport/robotView";
 
 type MeshEditor = MeshEntry["editor"];
+type WorldFeature = Omit<FeaturePick, "link">;
 
 function toTuple(v: THREE.Vector3): [number, number, number] {
   return [v.x, v.y, v.z];
@@ -38,9 +39,8 @@ export function nextFeatureKind(constraint: FeatureConstraint, pickIndex: number
   return "line";
 }
 
-function pickFromPrimitiveCylinder(geom: GeomRef): FeaturePick | null {
-  const robotGeom = geom; // visual origin carries cylinder frame (Z = axis)
-  const m = meshWorldMatrix(robotGeom);
+function pickFromPrimitiveCylinder(geom: GeomRef): WorldFeature | null {
+  const m = meshWorldMatrix(geom);
   // URDF cylinder mesh is Z-aligned after primitiveGeometry rotateX fix — local Y in three
   // CylinderGeometry was rotated X by π/2 so URDF Z → three local Z. Axis is local Z.
   const center = transformPoint(m, [0, 0, 0]);
@@ -55,73 +55,38 @@ function pickFromPrimitiveCylinder(geom: GeomRef): FeaturePick | null {
 
 function fitCircleOnMesh(
   editor: MeshEditor,
-  camera: THREE.Camera,
-  meshMatrix: THREE.Matrix4,
-  w: number,
-  h: number,
-  x: number,
-  y: number,
-  scale: [number, number, number],
-): FeaturePick | null {
-  const mvp = mvpForMesh(camera, meshMatrix);
-  const faceIds = Array.from(editor.faceIds());
-  // Prefer faces under cursor; fall back to a screen circle.
-  let faces = Array.from(editor.inCircle("face", mvp, w, h, x, y, 28));
-  if (!faces.length) faces = Array.from(editor.inCircle("face", mvp, w, h, x, y, 56));
-  if (!faces.length && faceIds.length) {
-    // Last resort: whole mesh cylinder fit.
-    try {
-      const results = editor.fitPrimitives({
-        shape: "cylinder",
-        mode: "least_squares",
-        axis: "auto",
-        aligned: false,
-        per_island: true,
-        all: true,
-        scale,
-      }) as FitResult[];
-      const cyl = results.find((r) => r.geometry.type === "cylinder");
-      if (!cyl) return null;
-      return fitResultToPick(cyl, meshMatrix, scale);
-    } catch {
-      return null;
-    }
-  }
-  if (!faces.length) return null;
-
-  const prev = editor.faceSelection();
-  const prevIds = editor.faceIds();
+  geom: GeomRef,
+  ctx: FeaturePickContext,
+): WorldFeature | null {
+  const mvp = mvpForMesh(ctx.camera, meshWorldMatrix(geom));
+  const { width, height, x, y } = ctx;
+  let faces = Array.from(editor.inCircle("face", mvp, width, height, x, y, 28));
+  if (!faces.length) faces = Array.from(editor.inCircle("face", mvp, width, height, x, y, 56));
+  const wholeMesh = faces.length === 0;
   try {
-    editor.selectRaw("face", Uint32Array.from(faces), "set");
     const results = editor.fitPrimitives({
       shape: "cylinder",
       mode: "least_squares",
       axis: "auto",
       aligned: false,
-      per_island: false,
-      all: false,
-      scale,
+      per_island: wholeMesh,
+      all: wholeMesh,
+      ...(wholeMesh ? {} : { face_ids: faces }),
+      scale: geom.mesh.scale.toArray(),
     }) as FitResult[];
-    const cyl = results.find((r) => r.geometry.type === "cylinder") ?? results[0];
-    if (!cyl || cyl.geometry.type !== "cylinder") return null;
-    return fitResultToPick(cyl, meshMatrix, scale);
+    const cylinder = results.find((r) => r.geometry.type === "cylinder");
+    return cylinder ? fitResultToPick(cylinder, geom.origin.matrixWorld) : null;
   } catch {
     return null;
-  } finally {
-    // Restore previous face selection without undo.
-    const selected: number[] = [];
-    for (let i = 0; i < prev.length; i++) if (prev[i]) selected.push(prevIds[i]);
-    editor.selectRaw("face", Uint32Array.from(selected), "set");
   }
 }
 
-function fitResultToPick(r: FitResult, meshMatrix: THREE.Matrix4, _scale: [number, number, number]): FeaturePick {
-  // Fit center/rotation are in editor (file) coordinates; mesh.matrixWorld maps them to world
-  // (including URDF mesh scale on the three.js mesh).
-  const center = transformPoint(meshMatrix, r.center);
+function fitResultToPick(r: FitResult, originMatrix: THREE.Matrix4): WorldFeature {
+  // Fitting already applied URDF scale. Only place the fit in the geometry frame.
+  const center = transformPoint(originMatrix, r.center);
   const q = new THREE.Quaternion(...r.rotation);
   const axisLocal = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
-  const axis = transformDir(meshMatrix, [axisLocal.x, axisLocal.y, axisLocal.z]);
+  const axis = transformDir(originMatrix, axisLocal.toArray());
   return {
     kind: "circle",
     origin: toTuple(center),
@@ -138,7 +103,7 @@ function pickLine(
   h: number,
   x: number,
   y: number,
-): FeaturePick | null {
+): WorldFeature | null {
   const mvp = mvpForMesh(camera, meshMatrix);
   const pairs = editor.pickEdges(mvp, w, h, x, y, 14, 16);
   if (!pairs.length) return null;
@@ -168,7 +133,7 @@ function pickPoint(
   h: number,
   x: number,
   y: number,
-): FeaturePick | null {
+): WorldFeature | null {
   const mvp = mvpForMesh(camera, meshMatrix);
   const verts = editor.pickVerts(mvp, w, h, x, y, 16, 16);
   if (verts.length) {
@@ -203,51 +168,32 @@ export function pickFeatureAt(ctx: FeaturePickContext): FeaturePick | null {
   const geom = ctx.geoms.find((g) => g.mesh === mesh);
   if (!geom) return null;
 
-  // URDF primitive cylinder → exact center/axis.
-  if (ctx.kind === "circle") {
-    const entry = geom.meshPath ? getMesh(geom.meshPath) : null;
-    if (!entry) {
-      // Likely a primitive; cylinder axis is local Z of the mesh after build.
-      return pickFromPrimitiveCylinder(geom);
-    }
-    const scale: [number, number, number] = [mesh.scale.x, mesh.scale.y, mesh.scale.z];
-    return fitCircleOnMesh(entry.editor, ctx.camera, meshWorldMatrix(geom), ctx.width, ctx.height, ctx.x, ctx.y, scale);
-  }
+  const feature = pickOnGeometry(ctx, geom, hits[0].point);
+  const linkFrame = geom.origin.parent;
+  if (!feature || !linkFrame) return null;
+  linkFrame.updateWorldMatrix(true, false);
+  const inverse = linkFrame.matrixWorld.clone().invert();
+  return {
+    ...feature,
+    link: geom.link,
+    origin: transformPoint(inverse, feature.origin).toArray(),
+    direction: new THREE.Vector3(...feature.direction).transformDirection(inverse).toArray(),
+  };
+}
 
-  if (!geom.meshPath) {
-    // Primitive edges aren't in a MeshEditor — synthesize axes from the box/cylinder/sphere frame.
-    const m = meshWorldMatrix(geom);
+function pickOnGeometry(ctx: FeaturePickContext, geom: GeomRef, hitPoint: THREE.Vector3): WorldFeature | null {
+  if (geom.geometryType !== "mesh") {
+    if (ctx.kind === "circle" && geom.geometryType === "cylinder") return pickFromPrimitiveCylinder(geom);
     if (ctx.kind === "point") {
-      const p = hits[0].point.clone();
-      return { kind: "point", origin: toTuple(p), direction: [0, 0, 0], label: `${geom.link} 表面点` };
+      return { kind: "point", origin: toTuple(hitPoint), direction: [0, 0, 0], label: `${geom.link} 表面点` };
     }
-    // Use closest local axis projected as a line through hit point.
-    const localAxes = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)];
-    const hitLocal = hits[0].point.clone().applyMatrix4(m.clone().invert());
-    let best = localAxes[0];
-    let bestDot = -1;
-    const view = ctx.camera.getWorldDirection(new THREE.Vector3());
-    for (const a of localAxes) {
-      const aw = transformDir(m, [a.x, a.y, a.z]);
-      const score = 1 - Math.abs(aw.dot(view));
-      if (score > bestDot) {
-        bestDot = score;
-        best = a;
-      }
-    }
-    void hitLocal;
-    const dir = transformDir(m, [best.x, best.y, best.z]);
-    return {
-      kind: "line",
-      origin: toTuple(hits[0].point),
-      direction: toTuple(dir),
-      label: `${geom.link} 局部轴`,
-    };
+    return null;
   }
 
   const entry = getMesh(geom.meshPath);
   if (!entry) return null;
-  const M = meshWorldMatrix(geom);
-  if (ctx.kind === "point") return pickPoint(entry.editor, ctx.camera, M, ctx.width, ctx.height, ctx.x, ctx.y);
-  return pickLine(entry.editor, ctx.camera, M, ctx.width, ctx.height, ctx.x, ctx.y);
+  if (ctx.kind === "circle") return fitCircleOnMesh(entry.editor, geom, ctx);
+  const matrix = meshWorldMatrix(geom);
+  const pick = ctx.kind === "point" ? pickPoint : pickLine;
+  return pick(entry.editor, ctx.camera, matrix, ctx.width, ctx.height, ctx.x, ctx.y);
 }

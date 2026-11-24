@@ -6,12 +6,13 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from "three-mesh-bvh";
-import { featureEndpoints } from "../edit/featureAlign";
+import { featureEndpoints, featureInWorld } from "../edit/featureAlign";
 import { nextFeatureKind, pickFeatureAt } from "../edit/featurePick";
 import { adjustLast, currentEntry, meshChanged, runCmd, undoMesh } from "../edit/meshOps";
 import { allMeshes, syncGeometry } from "../mesh/registry";
 import {
   applyFeatureAlign,
+  featureAlignReady,
   cancelFeatureAlign,
   effectiveJointValues,
   enterEditMode,
@@ -339,7 +340,8 @@ export class Engine {
     if (st.mode !== prev.mode || st.editTarget !== prev.editTarget) this.setupOverlay();
     if (st.xray !== prev.xray) this.overlay?.setXray(st.xray);
     if (st.fitPreview !== prev.fitPreview && !this.needsRebuild) this.updateFitPreview();
-    if (st.featureAlign !== prev.featureAlign) this.updateFeatureOverlay();
+    if (!this.needsRebuild && (st.featureAlign !== prev.featureAlign || (st.featureAlign && st.jointValues !== prev.jointValues)))
+      this.updateFeatureOverlay();
   }
 
   private rebuildRobot() {
@@ -347,6 +349,7 @@ export class Engine {
     const st = s();
     if (!st.robot) {
       this.robotView.dispose();
+      this.clearFeatureOverlay();
       this.setupOverlay();
       return;
     }
@@ -359,6 +362,7 @@ export class Engine {
       wireframe: st.wireframe,
     });
     this.applyJoints();
+    this.updateFeatureOverlay();
     this.updateSelectionVisuals();
     this.setupOverlay();
     this.updateFitPreview();
@@ -526,7 +530,9 @@ export class Engine {
     const fa = s().featureAlign;
     if (!fa) return;
     const len = Math.max(0.04, this.robotView.helperSize * 1.2);
-    fa.picks.forEach((pick, i) => {
+    fa.picks.forEach((localPick, i) => {
+      const pick = featureInWorld(localPick);
+      if (!pick) return;
       const color = i === 0 ? 0xff6b3d : 0x3dbbff;
       const { a, b, c } = featureEndpoints(pick, len);
       if (pick.kind === "point" || pick.kind === "circle") {
@@ -549,7 +555,8 @@ export class Engine {
 
   private featureAlignClick(x: number, y: number) {
     const fa = s().featureAlign;
-    if (!fa) return;
+    if (!fa || featureAlignReady(fa)) return;
+    if (this.needsRebuild) this.rebuildRobot();
     const kind = nextFeatureKind(fa.constraint, fa.picks.length);
     const pick = pickFeatureAt({
       camera: this.camera,
@@ -567,7 +574,6 @@ export class Engine {
       return;
     }
     pushFeaturePick(pick);
-    this.updateFeatureOverlay();
   }
 
   private commitGizmo() {
@@ -1469,7 +1475,6 @@ export class Engine {
       }
       if (e.key === "Enter") {
         applyFeatureAlign();
-        this.clearFeatureOverlay();
         return true;
       }
     }

@@ -453,6 +453,16 @@ export function updateJoint(name: string, fn: (j: Joint) => void, merge = false)
   store.setState({ jointValues: initialJointValues(robot, s().jointValues) });
 }
 
+function rebaseJoint(robot: Robot, joint: Joint, q: number) {
+  joint.origin = foldJointValue(joint, q);
+  shiftJointCalibration(joint, q);
+  for (const follower of robot.joints) {
+    if (follower.mimic?.joint === joint.name) {
+      follower.mimic.offset += q * follower.mimic.multiplier;
+    }
+  }
+}
+
 /** Absorb the current joint value into URDF origin and treat it as the new zero. */
 export function setJointZero(name: string) {
   const { robot, jointValues, keyframes } = s();
@@ -475,11 +485,7 @@ export function setJointZero(name: string) {
     (r) => {
       const j = r.joints.find((x) => x.name === name);
       if (!j) return;
-      j.origin = foldJointValue(j, q);
-      shiftJointCalibration(j, q);
-      for (const m of r.joints) {
-        if (m.mimic?.joint === name) m.mimic.offset -= q * m.mimic.multiplier;
-      }
+      rebaseJoint(r, j, q);
     },
     { snapJoints: true },
   );
@@ -503,15 +509,15 @@ export type AxisRemapTarget = "jointX" | "jointY" | "jointZ" | "worldX" | "world
 /** Remap motion axis; folds current q into origin first when q ≠ 0 (one undo step). */
 export function remapJointAxisDir(name: string, target: AxisRemapTarget | THREE.Vector3) {
   const { robot, jointValues, keyframes } = s();
-  if (!robot) return;
+  if (!robot) return false;
   const joint = robot.joints.find((j) => j.name === name);
   if (!joint || !canRemapJointAxis(joint)) {
     s().setStatus("该关节类型不支持轴重定向", "error");
-    return;
+    return false;
   }
   if (joint.mimic) {
     s().setStatus("mimic 关节请对其跟随的源关节调整轴", "error");
-    return;
+    return false;
   }
   const q = jointValues[name] ?? 0;
 
@@ -528,20 +534,14 @@ export function remapJointAxisDir(name: string, target: AxisRemapTarget | THREE.
   const cur = axisInParent(joint);
   if (Math.abs(q) < 1e-12 && cur.dot(dir.clone().normalize()) > 1 - 1e-8 && Math.abs(joint.axis[2]) > 0.99) {
     s().setStatus("轴已对齐目标方向");
-    return;
+    return true;
   }
 
   editRobot(
     (r) => {
       const j = r.joints.find((x) => x.name === name);
       if (!j) return;
-      if (Math.abs(q) > 1e-12) {
-        j.origin = foldJointValue(j, q);
-        shiftJointCalibration(j, q);
-        for (const m of r.joints) {
-          if (m.mimic?.joint === name) m.mimic.offset -= q * m.mimic.multiplier;
-        }
-      }
+      if (Math.abs(q) > 1e-12) rebaseJoint(r, j, q);
       // After folding, joint-local X/Y/Z targets still refer to the pre-fold frame
       // for world/explicit vectors; joint-local presets were captured above.
       remapAxisMath(r, j, dir);
@@ -563,6 +563,7 @@ export function remapJointAxisDir(name: string, target: AxisRemapTarget | THREE.
     playing: false,
   });
   s().setStatus(`已重定向 ${name} 的运动轴（已补偿子 link）`, "ok");
+  return true;
 }
 
 const CONSTRAINT_PICKS: Record<FeatureConstraint, { moving: string; reference: string; count: number }> = {
@@ -594,6 +595,7 @@ export function beginFeatureAlign(opts: { joint?: string; constraint?: FeatureCo
   };
   store.setState({
     featureAlign: state,
+    playing: false,
     selection: { kind: "joint", name: jointName },
     gizmo: "none",
     modalHint: featureAlignHint(state),
@@ -634,27 +636,48 @@ export function featureAlignHint(fa: FeatureAlignState): string {
   return `特征对齐 [${fa.joint}] ${fa.constraint}: 选择${which}（${kindHint}）(${fa.picks.length}/${need})`;
 }
 
+export function featureAlignReady(fa: FeatureAlignState) {
+  return fa.picks.length >= CONSTRAINT_PICKS[fa.constraint].count;
+}
+
 export function pushFeaturePick(pick: FeaturePick) {
-  const fa = s().featureAlign;
-  if (!fa) return;
-  const need = CONSTRAINT_PICKS[fa.constraint].count;
-  const picks = [...fa.picks, pick].slice(0, need);
+  const { featureAlign: fa, robot } = s();
+  if (!fa || !robot || featureAlignReady(fa)) return;
+  if (fa.constraint !== "axisAlign") {
+    const joint = robot.joints.find((j) => j.name === fa.joint);
+    if (!joint) return;
+    const moving = fa.picks.length === 0;
+    if (subtree(robot, joint.child).links.has(pick.link) !== moving) {
+      s().setStatus(moving ? "移动特征必须位于子 link 子树内" : "参考特征必须位于子 link 子树外", "error");
+      return;
+    }
+  }
+  const picks = [...fa.picks, pick];
   const next = { ...fa, picks };
   store.setState({ featureAlign: next, modalHint: featureAlignHint(next) });
   s().setStatus(featureAlignHint(next));
-  if (picks.length >= need) applyFeatureAlign();
 }
 
 export function applyFeatureAlign() {
-  const fa = s().featureAlign;
-  const robot = s().robot;
+  const { featureAlign: fa, robot } = s();
   if (!fa || !robot) return;
-  const need = CONSTRAINT_PICKS[fa.constraint].count;
-  if (fa.picks.length < need) {
+  if (!featureAlignReady(fa)) {
     s().setStatus(featureAlignHint(fa), "error");
     return;
   }
-  const ok = applyFeatureConstraint(fa);
+  if (fa.constraint !== "axisAlign") {
+    const joint = robot.joints.find((j) => j.name === fa.joint);
+    if (!joint) {
+      s().setStatus(`找不到关节 ${fa.joint}`, "error");
+      return;
+    }
+    const { links } = subtree(robot, joint.child);
+    if (!links.has(fa.picks[0].link) || links.has(fa.picks[1].link)) {
+      s().setStatus("移动特征和参考特征必须位于关节两侧", "error");
+      return;
+    }
+  }
+  const ok = applyFeatureConstraint(fa, remapJointAxisDir);
   if (ok) {
     const robot = s().robot!;
     store.setState({

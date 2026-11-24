@@ -1,6 +1,6 @@
 import { runCmd } from "../edit/meshOps";
 import { runOp } from "../edit/operators";
-import { beginFeatureAlign, cancelFeatureAlign, enterEditMode, exitEditMode, setFeatureAlignConstraint } from "../state/actions";
+import { applyFeatureAlign, beginFeatureAlign, featureAlignReady, cancelFeatureAlign, enterEditMode, exitEditMode, setFeatureAlignConstraint } from "../state/actions";
 import { useStore, type FeatureConstraint } from "../state/store";
 
 const ALIGN_OPTS: { id: FeatureConstraint; label: string }[] = [
@@ -64,6 +64,9 @@ export function ViewportHeader() {
             ))}
           </div>
           <div className="seg">
+            <button onClick={applyFeatureAlign} disabled={!featureAlignReady(fa)} title="Enter">
+              应用
+            </button>
             <button onClick={() => cancelFeatureAlign()} title="Esc">
               取消
             </button>

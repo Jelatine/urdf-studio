@@ -11,6 +11,7 @@ export interface GeomRef {
   role: "visual" | "collision";
   index: number;
   meshPath: string | null;
+  geometryType: Geometry["type"];
   /** Group carrying the <origin> transform. */
   origin: THREE.Group;
   /** The rendered mesh (scaled for mesh geometry). */
@@ -218,7 +219,7 @@ export class RobotView {
     mesh.renderOrder = role === "collision" ? 2 : 0;
     origin.add(mesh);
     frame.add(origin);
-    this.geoms.push({ link, role, index, meshPath, origin, mesh });
+    this.geoms.push({ link, role, index, meshPath, geometryType: g.type, origin, mesh });
   }
 
   private buildHelpers(robot: Robot, opts: BuildOptions) {
