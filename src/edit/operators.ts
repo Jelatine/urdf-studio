@@ -4,6 +4,8 @@
 import * as THREE from "three";
 import {
   addChildLink,
+  beginFeatureAlign,
+  cancelFeatureAlign,
   deleteSelection,
   enterEditMode,
   exitEditMode,
@@ -319,6 +321,22 @@ export const operators: Operator[] = [
   { id: "obj.move", label: "移动关节原点 (操纵器)", group: "对象", keys: "G", mode: "object", run: () => store.setState({ gizmo: "translate" }) },
   { id: "obj.rotate", label: "旋转关节原点 (操纵器)", group: "对象", keys: "R", mode: "object", run: () => store.setState({ gizmo: "rotate" }) },
   { id: "obj.gizmoOff", label: "隐藏操纵器", group: "对象", keys: "Esc", mode: "object", run: () => store.setState({ gizmo: "none" }) },
+  {
+    id: "obj.featureAlign",
+    label: "特征对齐…",
+    group: "对象",
+    keys: "Shift+Alt+A",
+    mode: "object",
+    run: () => beginFeatureAlign({}),
+  },
+  {
+    id: "obj.featureAlignCancel",
+    label: "取消特征对齐",
+    group: "对象",
+    keys: "Esc",
+    mode: "object",
+    run: () => cancelFeatureAlign(),
+  },
   { id: "sim.play", label: "播放/暂停运动模拟", group: "模拟", keys: "Space", mode: "object", run: togglePlay },
   // ---- edit: select
   { id: "sel.vert", label: "顶点选择模式", group: "选择", keys: "1", mode: "edit", run: selectMode("vert") },

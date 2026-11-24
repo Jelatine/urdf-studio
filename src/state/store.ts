@@ -77,6 +77,32 @@ export interface ConfirmRequest {
   resolve: (id: string | null) => void;
 }
 
+/** Runtime joint state snapshotted with a robot undo step (null = leave values alone). */
+export type JointSnap = { values: Record<string, number>; keyframes: Record<string, number>[] } | null;
+
+export type FeatureConstraint = "parallel" | "collinear" | "concentric" | "axisAlign";
+
+export type FeatureKind = "line" | "point" | "circle";
+
+/** A world-space geometric feature picked for alignment. */
+export interface FeaturePick {
+  kind: FeatureKind;
+  /** World-space point (line point / circle center / vertex). */
+  origin: [number, number, number];
+  /** World-space unit direction (line / circle axis); zero for plain points. */
+  direction: [number, number, number];
+  label: string;
+}
+
+export interface FeatureAlignState {
+  joint: string;
+  constraint: FeatureConstraint;
+  /** Moving feature first, then reference. */
+  picks: FeaturePick[];
+  /** When true, only remaps axis from a single line (no second pick). */
+  axisOnly: boolean;
+}
+
 interface State {
   project: ProjectInfo | null;
   robot: Robot | null;
@@ -86,6 +112,9 @@ interface State {
   /** Global undo sequence numbers of the robot steps (parallel to robotUndo/robotRedo, see history.ts). */
   robotUndoSeq: number[];
   robotRedoSeq: number[];
+  /** Parallel to robotUndo/robotRedo: restore jointValues/keyframes when non-null. */
+  jointSnapUndo: JointSnap[];
+  jointSnapRedo: JointSnap[];
   issues: Issue[];
   /** filename (as written in the URDF) -> project path, or null if missing. */
   meshPaths: Record<string, string | null>;
@@ -100,6 +129,8 @@ interface State {
   lastOp: LastOp | null;
   proportional: Proportional;
   gizmo: "translate" | "rotate" | "none";
+  /** Object-mode feature alignment tool. */
+  featureAlign: FeatureAlignState | null;
 
   jointValues: Record<string, number>;
   playing: false | "sweep" | "random" | "keyframes";
@@ -126,7 +157,7 @@ interface State {
   set: (p: Partial<State>) => void;
   setStatus: (msg: string, kind?: State["statusKind"]) => void;
   /** Applies an edit to a copy of the robot with undo support. */
-  editRobot: (fn: (r: Robot) => void, opts?: { merge?: boolean }) => void;
+  editRobot: (fn: (r: Robot) => void, opts?: { merge?: boolean; snapJoints?: boolean }) => void;
   undoRobot: () => void;
   redoRobot: () => void;
 }
@@ -147,6 +178,8 @@ export const useStore = create<State>((set, get) => ({
   robotRedo: [],
   robotUndoSeq: [],
   robotRedoSeq: [],
+  jointSnapUndo: [],
+  jointSnapRedo: [],
   issues: [],
   meshPaths: {},
   meshInfo: {},
@@ -159,6 +192,7 @@ export const useStore = create<State>((set, get) => ({
   lastOp: null,
   proportional: { enabled: false, radius: 0.05, falloff: "smooth", connected: false },
   gizmo: "translate",
+  featureAlign: null,
 
   jointValues: {},
   playing: false,
@@ -186,7 +220,7 @@ export const useStore = create<State>((set, get) => ({
   setStatus: (status, statusKind = "info") => set({ status, statusKind }),
 
   editRobot: (fn, opts) => {
-    const { robot, robotUndo, robotUndoSeq } = get();
+    const { robot, robotUndo, robotUndoSeq, jointSnapUndo, jointValues, keyframes } = get();
     if (!robot) return;
     const next = structuredClone(robot);
     fn(next);
@@ -195,38 +229,55 @@ export const useStore = create<State>((set, get) => ({
     const now = performance.now();
     const merge = opts?.merge && now - lastMergeKey < 800;
     lastMergeKey = now;
+    const snap: JointSnap = opts?.snapJoints
+      ? { values: { ...jointValues }, keyframes: keyframes.map((k) => ({ ...k })) }
+      : null;
     set({
       robot: next,
       robotDirty: true,
       robotUndo: merge ? robotUndo : [...robotUndo.slice(-99), robot],
       robotUndoSeq: merge ? robotUndoSeq : [...robotUndoSeq.slice(-99), undoSeqSource()],
+      jointSnapUndo: merge ? jointSnapUndo : [...jointSnapUndo.slice(-99), snap],
       robotRedo: [],
       robotRedoSeq: [],
+      jointSnapRedo: [],
     });
   },
   undoRobot: () => {
-    const { robot, robotUndo, robotRedo, robotUndoSeq, robotRedoSeq } = get();
+    const { robot, robotUndo, robotRedo, robotUndoSeq, robotRedoSeq, jointSnapUndo, jointSnapRedo, jointValues, keyframes } =
+      get();
     if (!robot || !robotUndo.length) return;
     const prev = robotUndo[robotUndo.length - 1];
+    const snap = jointSnapUndo[jointSnapUndo.length - 1] ?? null;
+    const curSnap: JointSnap = snap ? { values: { ...jointValues }, keyframes: keyframes.map((k) => ({ ...k })) } : null;
     set({
       robot: prev,
       robotUndo: robotUndo.slice(0, -1),
       robotRedo: [...robotRedo, robot],
       robotUndoSeq: robotUndoSeq.slice(0, -1),
       robotRedoSeq: [...robotRedoSeq, robotUndoSeq[robotUndoSeq.length - 1] ?? 0],
+      jointSnapUndo: jointSnapUndo.slice(0, -1),
+      jointSnapRedo: [...jointSnapRedo, curSnap],
+      ...(snap ? { jointValues: snap.values, keyframes: snap.keyframes, playing: false as const } : {}),
       robotDirty: true,
     });
   },
   redoRobot: () => {
-    const { robot, robotUndo, robotRedo, robotUndoSeq, robotRedoSeq } = get();
+    const { robot, robotUndo, robotRedo, robotUndoSeq, robotRedoSeq, jointSnapUndo, jointSnapRedo, jointValues, keyframes } =
+      get();
     if (!robot || !robotRedo.length) return;
     const next = robotRedo[robotRedo.length - 1];
+    const snap = jointSnapRedo[jointSnapRedo.length - 1] ?? null;
+    const curSnap: JointSnap = snap ? { values: { ...jointValues }, keyframes: keyframes.map((k) => ({ ...k })) } : null;
     set({
       robot: next,
       robotRedo: robotRedo.slice(0, -1),
       robotUndo: [...robotUndo, robot],
       robotRedoSeq: robotRedoSeq.slice(0, -1),
       robotUndoSeq: [...robotUndoSeq, robotRedoSeq[robotRedoSeq.length - 1] ?? 0],
+      jointSnapRedo: jointSnapRedo.slice(0, -1),
+      jointSnapUndo: [...jointSnapUndo, curSnap],
+      ...(snap ? { jointValues: snap.values, keyframes: snap.keyframes, playing: false as const } : {}),
       robotDirty: true,
     });
   },

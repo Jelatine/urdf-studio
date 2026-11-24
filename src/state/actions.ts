@@ -16,7 +16,36 @@ import {
 } from "../types/urdf";
 import { MeshEditor, parseUrdf, resolveMesh, siblingReference, validateUrdf, writeUrdf, type FitOptions, type FitResult } from "../wasm";
 import { redoStep, undoGroup, undoStep, type HistoryStep } from "./history";
-import { store, type ConfirmRequest, type EditTarget, type FitTarget, type ProjectInfo } from "./store";
+import {
+  axisInParent,
+  canRemapJointAxis,
+  canSetJointZero,
+  foldJointValue,
+  jointFrameAxisInParent,
+  remapJointAxis as remapAxisMath,
+  shiftJointCalibration,
+} from "../math/jointPose";
+import { applyFeatureConstraint } from "../edit/featureAlign";
+import { getEngine } from "../viewport/engine";
+import {
+  store,
+  type ConfirmRequest,
+  type EditTarget,
+  type FeatureAlignState,
+  type FeatureConstraint,
+  type FeaturePick,
+  type FitTarget,
+  type ProjectInfo,
+} from "./store";
+
+/** World-space unit direction expressed in a link's local frame (via live FK). */
+function worldDirInParent(parentLink: string, worldDir: THREE.Vector3): THREE.Vector3 {
+  const parent = getEngine()?.robotView.links.get(parentLink);
+  if (!parent) return worldDir.clone().normalize();
+  parent.updateWorldMatrix(true, false);
+  const n = new THREE.Matrix3().getNormalMatrix(parent.matrixWorld.clone().invert());
+  return worldDir.clone().applyMatrix3(n).normalize();
+}
 
 const s = () => store.getState();
 
@@ -113,6 +142,8 @@ function loadRobot(text: string, project: ProjectInfo) {
     robotRedo: [],
     robotUndoSeq: [],
     robotRedoSeq: [],
+    jointSnapUndo: [],
+    jointSnapRedo: [],
     meshPaths: {},
     meshInfo: {},
     meshVersion: s().meshVersion + 1,
@@ -121,6 +152,7 @@ function loadRobot(text: string, project: ProjectInfo) {
     editTarget: null,
     meshStats: null,
     lastOp: null,
+    featureAlign: null,
     jointValues: initialJointValues(robot),
     keyframes: [],
     playing: false,
@@ -253,8 +285,9 @@ export async function saveProject(mode: SaveMode): Promise<boolean> {
 
 // ------------------------------------------------------------ robot editing
 
-export function editRobot(fn: (r: Robot) => void, merge = false) {
-  s().editRobot(fn, { merge });
+export function editRobot(fn: (r: Robot) => void, mergeOrOpts: boolean | { merge?: boolean; snapJoints?: boolean } = false) {
+  const opts = typeof mergeOrOpts === "boolean" ? { merge: mergeOrOpts } : mergeOrOpts;
+  s().editRobot(fn, opts);
   validate();
 }
 
@@ -418,6 +451,219 @@ export function updateJoint(name: string, fn: (j: Joint) => void, merge = false)
   }, merge);
   const robot = s().robot!;
   store.setState({ jointValues: initialJointValues(robot, s().jointValues) });
+}
+
+/** Absorb the current joint value into URDF origin and treat it as the new zero. */
+export function setJointZero(name: string) {
+  const { robot, jointValues, keyframes } = s();
+  if (!robot) return;
+  const joint = robot.joints.find((j) => j.name === name);
+  if (!joint || !canSetJointZero(joint)) {
+    s().setStatus("该关节类型不支持设为零点", "error");
+    return;
+  }
+  if (joint.mimic) {
+    s().setStatus("mimic 关节请对其跟随的源关节设零点", "error");
+    return;
+  }
+  const q = jointValues[name] ?? 0;
+  if (Math.abs(q) < 1e-12) {
+    s().setStatus("当前值已是零，无需设零点");
+    return;
+  }
+  editRobot(
+    (r) => {
+      const j = r.joints.find((x) => x.name === name);
+      if (!j) return;
+      j.origin = foldJointValue(j, q);
+      shiftJointCalibration(j, q);
+      for (const m of r.joints) {
+        if (m.mimic?.joint === name) m.mimic.offset -= q * m.mimic.multiplier;
+      }
+    },
+    { snapJoints: true },
+  );
+  const nextValues = { ...jointValues, [name]: 0 };
+  const nextFrames = keyframes.map((kf) => {
+    const copy = { ...kf };
+    if (name in copy) copy[name] = (copy[name] ?? 0) - q;
+    return copy;
+  });
+  store.setState({
+    jointValues: initialJointValues(s().robot!, nextValues),
+    keyframes: nextFrames,
+    playing: false,
+  });
+  const unit = joint.joint_type === "prismatic" ? "m" : "rad";
+  s().setStatus(`已将 ${name} 当前位置设为零点 (Δ=${q.toFixed(4)} ${unit})`, "ok");
+}
+
+export type AxisRemapTarget = "jointX" | "jointY" | "jointZ" | "worldX" | "worldY" | "worldZ";
+
+/** Remap motion axis; folds current q into origin first when q ≠ 0 (one undo step). */
+export function remapJointAxisDir(name: string, target: AxisRemapTarget | THREE.Vector3) {
+  const { robot, jointValues, keyframes } = s();
+  if (!robot) return;
+  const joint = robot.joints.find((j) => j.name === name);
+  if (!joint || !canRemapJointAxis(joint)) {
+    s().setStatus("该关节类型不支持轴重定向", "error");
+    return;
+  }
+  if (joint.mimic) {
+    s().setStatus("mimic 关节请对其跟随的源关节调整轴", "error");
+    return;
+  }
+  const q = jointValues[name] ?? 0;
+
+  // Resolve target in parent frame from the pre-edit joint (joint-local presets).
+  let dir: THREE.Vector3;
+  if (target instanceof THREE.Vector3) dir = target.clone();
+  else if (target === "jointX") dir = jointFrameAxisInParent(joint, 0);
+  else if (target === "jointY") dir = jointFrameAxisInParent(joint, 1);
+  else if (target === "jointZ") dir = jointFrameAxisInParent(joint, 2);
+  else if (target === "worldX") dir = worldDirInParent(joint.parent, new THREE.Vector3(1, 0, 0));
+  else if (target === "worldY") dir = worldDirInParent(joint.parent, new THREE.Vector3(0, 1, 0));
+  else dir = worldDirInParent(joint.parent, new THREE.Vector3(0, 0, 1));
+
+  const cur = axisInParent(joint);
+  if (Math.abs(q) < 1e-12 && cur.dot(dir.clone().normalize()) > 1 - 1e-8 && Math.abs(joint.axis[2]) > 0.99) {
+    s().setStatus("轴已对齐目标方向");
+    return;
+  }
+
+  editRobot(
+    (r) => {
+      const j = r.joints.find((x) => x.name === name);
+      if (!j) return;
+      if (Math.abs(q) > 1e-12) {
+        j.origin = foldJointValue(j, q);
+        shiftJointCalibration(j, q);
+        for (const m of r.joints) {
+          if (m.mimic?.joint === name) m.mimic.offset -= q * m.mimic.multiplier;
+        }
+      }
+      // After folding, joint-local X/Y/Z targets still refer to the pre-fold frame
+      // for world/explicit vectors; joint-local presets were captured above.
+      remapAxisMath(r, j, dir);
+    },
+    { snapJoints: true },
+  );
+  const nextValues = { ...jointValues, [name]: 0 };
+  const nextFrames =
+    Math.abs(q) > 1e-12
+      ? keyframes.map((kf) => {
+          const copy = { ...kf };
+          if (name in copy) copy[name] = (copy[name] ?? 0) - q;
+          return copy;
+        })
+      : keyframes;
+  store.setState({
+    jointValues: initialJointValues(s().robot!, nextValues),
+    keyframes: nextFrames,
+    playing: false,
+  });
+  s().setStatus(`已重定向 ${name} 的运动轴（已补偿子 link）`, "ok");
+}
+
+const CONSTRAINT_PICKS: Record<FeatureConstraint, { moving: string; reference: string; count: number }> = {
+  parallel: { moving: "移动侧直线", reference: "参考直线", count: 2 },
+  collinear: { moving: "移动侧点", reference: "参考直线", count: 2 },
+  concentric: { moving: "移动侧圆心", reference: "参考圆心", count: 2 },
+  axisAlign: { moving: "目标直线（关节轴对齐到此）", reference: "", count: 1 },
+};
+
+export function beginFeatureAlign(opts: { joint?: string; constraint?: FeatureConstraint; axisOnly?: boolean } = {}) {
+  const { robot, selection, mode } = s();
+  if (!robot || mode === "edit") {
+    s().setStatus("请在对象模式下使用特征对齐", "error");
+    return;
+  }
+  const jointName =
+    opts.joint ??
+    (selection?.kind === "joint" ? selection.name : selection?.kind === "link" ? robot.joints.find((j) => j.child === selection.name)?.name : undefined);
+  if (!jointName || !robot.joints.some((j) => j.name === jointName)) {
+    s().setStatus("请先选择要对齐的关节（或子 link）", "error");
+    return;
+  }
+  const constraint = opts.constraint ?? (opts.axisOnly ? "axisAlign" : "concentric");
+  const state: FeatureAlignState = {
+    joint: jointName,
+    constraint,
+    picks: [],
+    axisOnly: !!opts.axisOnly || constraint === "axisAlign",
+  };
+  store.setState({
+    featureAlign: state,
+    selection: { kind: "joint", name: jointName },
+    gizmo: "none",
+    modalHint: featureAlignHint(state),
+  });
+  s().setStatus(featureAlignHint(state));
+}
+
+export function cancelFeatureAlign() {
+  if (!s().featureAlign) return;
+  store.setState({ featureAlign: null, modalHint: null });
+  s().setStatus("已取消特征对齐");
+}
+
+export function setFeatureAlignConstraint(constraint: FeatureConstraint) {
+  const fa = s().featureAlign;
+  if (!fa) return;
+  const next: FeatureAlignState = {
+    ...fa,
+    constraint,
+    picks: [],
+    axisOnly: constraint === "axisAlign",
+  };
+  store.setState({ featureAlign: next, modalHint: featureAlignHint(next) });
+  s().setStatus(featureAlignHint(next));
+}
+
+export function featureAlignHint(fa: FeatureAlignState): string {
+  const meta = CONSTRAINT_PICKS[fa.constraint];
+  const need = meta.count;
+  if (fa.picks.length >= need) return `特征已选齐 — Enter 应用，Esc 取消`;
+  const which = fa.picks.length === 0 ? meta.moving : meta.reference;
+  const kindHint =
+    fa.constraint === "concentric"
+      ? "点击圆柱面附近以拟合圆心"
+      : fa.constraint === "collinear" && fa.picks.length === 0
+        ? "点击顶点或边中点"
+        : "点击网格边以拾取直线";
+  return `特征对齐 [${fa.joint}] ${fa.constraint}: 选择${which}（${kindHint}）(${fa.picks.length}/${need})`;
+}
+
+export function pushFeaturePick(pick: FeaturePick) {
+  const fa = s().featureAlign;
+  if (!fa) return;
+  const need = CONSTRAINT_PICKS[fa.constraint].count;
+  const picks = [...fa.picks, pick].slice(0, need);
+  const next = { ...fa, picks };
+  store.setState({ featureAlign: next, modalHint: featureAlignHint(next) });
+  s().setStatus(featureAlignHint(next));
+  if (picks.length >= need) applyFeatureAlign();
+}
+
+export function applyFeatureAlign() {
+  const fa = s().featureAlign;
+  const robot = s().robot;
+  if (!fa || !robot) return;
+  const need = CONSTRAINT_PICKS[fa.constraint].count;
+  if (fa.picks.length < need) {
+    s().setStatus(featureAlignHint(fa), "error");
+    return;
+  }
+  const ok = applyFeatureConstraint(fa);
+  if (ok) {
+    const robot = s().robot!;
+    store.setState({
+      featureAlign: null,
+      modalHint: null,
+      jointValues: initialJointValues(robot, s().jointValues),
+    });
+    s().setStatus(`已应用特征对齐 (${fa.constraint}) 到 ${fa.joint}`, "ok");
+  }
 }
 
 // ---------------------------------------------------------- mesh geometry
@@ -685,6 +931,8 @@ export function enterEditMode(target?: EditTarget) {
     selection: { kind: "link", name: t.link },
     meshStats: entry.editor.stats(),
     lastOp: null,
+    featureAlign: null,
+    modalHint: null,
   });
   s().setStatus(`编辑网格 ${t.meshPath}（Tab 退出）`);
 }

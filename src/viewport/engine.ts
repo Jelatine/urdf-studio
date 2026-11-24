@@ -6,9 +6,18 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from "three-mesh-bvh";
+import { featureEndpoints } from "../edit/featureAlign";
+import { nextFeatureKind, pickFeatureAt } from "../edit/featurePick";
 import { adjustLast, currentEntry, meshChanged, runCmd, undoMesh } from "../edit/meshOps";
 import { allMeshes, syncGeometry } from "../mesh/registry";
-import { effectiveJointValues, enterEditMode, updateJoint } from "../state/actions";
+import {
+  applyFeatureAlign,
+  cancelFeatureAlign,
+  effectiveJointValues,
+  enterEditMode,
+  pushFeaturePick,
+  updateJoint,
+} from "../state/actions";
 import { store, type ParamSpec } from "../state/store";
 import { stepSimulation } from "../sim/simulation";
 import type { Command } from "../wasm";
@@ -123,6 +132,8 @@ export class Engine {
   private overlayMode = "";
   /** Shapes proposed by the fit dialog. */
   private fitPreview: THREE.Group | null = null;
+  /** World-space helpers for feature-align picks. */
+  private featureOverlay = new THREE.Group();
   readonly raycaster = new THREE.Raycaster();
   readonly cursor3d = new THREE.Group();
   private grid: THREE.Group;
@@ -185,6 +196,8 @@ export class Engine {
     this.grid = this.makeGrid();
     this.scene.add(this.grid);
     this.scene.add(this.robotView.root);
+    this.featureOverlay.name = "featureAlign";
+    this.scene.add(this.featureOverlay);
     this.makeCursor();
 
     this.boxDiv = document.createElement("div");
@@ -219,6 +232,7 @@ export class Engine {
     window.removeEventListener("pointerup", this.onPointerUp);
     this.overlay?.dispose();
     this.clearFitPreview();
+    this.clearFeatureOverlay();
     this.robotView.dispose();
     this.gizmo.dispose();
     this.controls.dispose();
@@ -320,10 +334,12 @@ export class Engine {
     }
     if (st.meshVersion !== prev.meshVersion) this.onMeshVersion();
     if (st.jointValues !== prev.jointValues && !this.needsRebuild) this.applyJoints();
-    if (st.selection !== prev.selection || st.gizmo !== prev.gizmo || st.mode !== prev.mode) this.updateSelectionVisuals();
+    if (st.selection !== prev.selection || st.gizmo !== prev.gizmo || st.mode !== prev.mode || st.featureAlign !== prev.featureAlign)
+      this.updateSelectionVisuals();
     if (st.mode !== prev.mode || st.editTarget !== prev.editTarget) this.setupOverlay();
     if (st.xray !== prev.xray) this.overlay?.setXray(st.xray);
     if (st.fitPreview !== prev.fitPreview && !this.needsRebuild) this.updateFitPreview();
+    if (st.featureAlign !== prev.featureAlign) this.updateFeatureOverlay();
   }
 
   private rebuildRobot() {
@@ -481,15 +497,77 @@ export class Engine {
     const joint = sel?.kind === "joint" ? sel.name : null;
     this.robotView.setHighlight(st.mode === "edit" ? null : link, joint);
     // Gizmo: moves the joint origin of the selected joint (or the selected
-    // link's parent joint) in object mode.
+    // link's parent joint) in object mode. Hidden during feature align.
     this.gizmo.detach();
     this.gizmoJoint = null;
-    if (!robot || st.mode !== "object" || st.gizmo === "none") return;
+    if (!robot || st.mode !== "object" || st.gizmo === "none" || st.featureAlign) return;
     const t = this.robotView.gizmoTarget(robot, sel);
     if (!t) return;
     this.gizmo.setMode(st.gizmo);
     this.gizmo.attach(t.object);
     this.gizmoJoint = t.joint;
+  }
+
+  private clearFeatureOverlay() {
+    while (this.featureOverlay.children.length) {
+      const c = this.featureOverlay.children.pop()!;
+      c.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        mesh.geometry?.dispose?.();
+        const mat = mesh.material as THREE.Material | THREE.Material[] | undefined;
+        if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+        else mat?.dispose?.();
+      });
+    }
+  }
+
+  private updateFeatureOverlay() {
+    this.clearFeatureOverlay();
+    const fa = s().featureAlign;
+    if (!fa) return;
+    const len = Math.max(0.04, this.robotView.helperSize * 1.2);
+    fa.picks.forEach((pick, i) => {
+      const color = i === 0 ? 0xff6b3d : 0x3dbbff;
+      const { a, b, c } = featureEndpoints(pick, len);
+      if (pick.kind === "point" || pick.kind === "circle") {
+        const dot = new THREE.Mesh(
+          new THREE.SphereGeometry(len * 0.12, 12, 8),
+          new THREE.MeshBasicMaterial({ color, depthTest: false }),
+        );
+        dot.position.copy(c);
+        dot.renderOrder = 40;
+        this.featureOverlay.add(dot);
+      }
+      if (pick.kind === "line" || pick.kind === "circle") {
+        const geo = new THREE.BufferGeometry().setFromPoints([a, b]);
+        const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color, depthTest: false }));
+        line.renderOrder = 40;
+        this.featureOverlay.add(line);
+      }
+    });
+  }
+
+  private featureAlignClick(x: number, y: number) {
+    const fa = s().featureAlign;
+    if (!fa) return;
+    const kind = nextFeatureKind(fa.constraint, fa.picks.length);
+    const pick = pickFeatureAt({
+      camera: this.camera,
+      width: this.container.clientWidth,
+      height: this.container.clientHeight,
+      x,
+      y,
+      geoms: this.robotView.geoms,
+      raycaster: this.raycaster,
+      ndc: this.ndc(x, y),
+      kind,
+    });
+    if (!pick) {
+      s().setStatus(`未拾取到${kind === "circle" ? "圆心" : kind === "point" ? "点" : "直线"}，请再试`, "error");
+      return;
+    }
+    pushFeaturePick(pick);
+    this.updateFeatureOverlay();
   }
 
   private commitGizmo() {
@@ -958,6 +1036,7 @@ export class Engine {
     }
     if (d.button !== 0 || this.gizmo.dragging) return;
     if (this.overlay) this.clickSelect(x, y, { shift: d.shift, ctrl: d.ctrl, alt: d.alt });
+    else if (s().featureAlign) this.featureAlignClick(x, y);
     else if (!(this.gizmo as unknown as { axis: string | null }).axis) this.objectClick(x, y, d.shift);
   };
 
@@ -1382,6 +1461,18 @@ export class Engine {
 
   /** Returns true when the key was consumed by an active modal tool. */
   handleModalKey(e: KeyboardEvent): boolean {
+    if (s().featureAlign) {
+      if (e.key === "Escape") {
+        cancelFeatureAlign();
+        this.clearFeatureOverlay();
+        return true;
+      }
+      if (e.key === "Enter") {
+        applyFeatureAlign();
+        this.clearFeatureOverlay();
+        return true;
+      }
+    }
     const m = this.modal;
     if (!m) return false;
     const k = e.key;

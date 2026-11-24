@@ -2,7 +2,20 @@ import { useEffect, useState } from "react";
 import * as THREE from "three";
 import { adjustLast, runCmd } from "../edit/meshOps";
 import { getMesh, MESH_FORMATS, type MeshFormat, type MeshMaterial } from "../mesh/registry";
-import { convertMeshFormat, convertToMesh, editRobot, enterEditMode, openFitDialog, renameJoint, renameLink, updateJoint } from "../state/actions";
+import {
+  beginFeatureAlign,
+  convertMeshFormat,
+  convertToMesh,
+  editRobot,
+  enterEditMode,
+  openFitDialog,
+  remapJointAxisDir,
+  renameJoint,
+  renameLink,
+  setJointZero,
+  updateJoint,
+} from "../state/actions";
+import { canRemapJointAxis, canSetJointZero } from "../math/jointPose";
 import { useStore } from "../state/store";
 import { isMovable, jointRange, zeroPose, type Collision, type Geometry, type Joint, type JointType, type Link, type Material, type Pose, type Robot, type Visual } from "../types/urdf";
 import { getEngine } from "../viewport/engine";
@@ -415,8 +428,25 @@ function JointInspector({ robot, joint }: { robot: Robot; joint: Joint }) {
           <span className="readout-inline">{angular ? ((value ?? 0) * RAD2DEG).toFixed(1) : (value ?? 0).toFixed(4)}</span>
         </Row>
       )}
+      {canSetJointZero(joint) && !joint.mimic && (
+        <Row label="零点">
+          <button
+            className="small"
+            title="把当前关节角/位移折入 origin，作为新的 URDF 零点"
+            onClick={() => setJointZero(joint.name)}
+            disabled={Math.abs(value ?? 0) < 1e-12}
+          >
+            设为零点
+          </button>
+        </Row>
+      )}
       <Section title="原点 origin (相对父 link)">
         <PoseFields pose={joint.origin} onChange={(p, sc) => upd((j) => (j.origin = p), sc)} />
+        <div className="button-row">
+          <button className="small" onClick={() => beginFeatureAlign({ joint: joint.name, constraint: "concentric" })} title="用圆心/直线等特征对齐关节">
+            特征对齐…
+          </button>
+        </div>
         <div className="dim pad">提示: 在对象模式按 G / R 可用操纵器在视图中拖动关节原点</div>
       </Section>
       {!(joint.joint_type === "fixed" || joint.joint_type === "floating") && (
@@ -443,6 +473,36 @@ function JointInspector({ robot, joint }: { robot: Robot; joint: Joint }) {
               归一化
             </button>
           </div>
+          {canRemapJointAxis(joint) && (
+            <>
+              <div className="dim pad">重定向运动轴（规范为局部 Z，并补偿子 link）</div>
+              <div className="button-row">
+                <button className="small" title="把当前关节 X 轴作为运动轴" onClick={() => remapJointAxisDir(joint.name, "jointX")}>
+                  →关节X
+                </button>
+                <button className="small" title="把当前关节 Y 轴作为运动轴" onClick={() => remapJointAxisDir(joint.name, "jointY")}>
+                  →关节Y
+                </button>
+                <button className="small" title="把当前运动轴规范为局部 Z" onClick={() => remapJointAxisDir(joint.name, "jointZ")}>
+                  →关节Z
+                </button>
+              </div>
+              <div className="button-row">
+                <button className="small" onClick={() => remapJointAxisDir(joint.name, "worldX")}>
+                  →世界X
+                </button>
+                <button className="small" onClick={() => remapJointAxisDir(joint.name, "worldY")}>
+                  →世界Y
+                </button>
+                <button className="small" onClick={() => remapJointAxisDir(joint.name, "worldZ")}>
+                  →世界Z
+                </button>
+                <button className="small" title="从网格边拾取方向作为运动轴" onClick={() => beginFeatureAlign({ joint: joint.name, axisOnly: true })}>
+                  从特征…
+                </button>
+              </div>
+            </>
+          )}
         </Section>
       )}
       <Section

@@ -1,13 +1,21 @@
 import { runCmd } from "../edit/meshOps";
 import { runOp } from "../edit/operators";
-import { enterEditMode, exitEditMode } from "../state/actions";
-import { useStore } from "../state/store";
+import { beginFeatureAlign, cancelFeatureAlign, enterEditMode, exitEditMode, setFeatureAlignConstraint } from "../state/actions";
+import { useStore, type FeatureConstraint } from "../state/store";
+
+const ALIGN_OPTS: { id: FeatureConstraint; label: string }[] = [
+  { id: "concentric", label: "圆同心" },
+  { id: "collinear", label: "点共线" },
+  { id: "parallel", label: "线平行" },
+  { id: "axisAlign", label: "轴对齐" },
+];
 
 export function ViewportHeader() {
   const st = useStore();
   const robot = st.robot;
   if (!robot) return null;
   const smode = st.meshStats?.mode ?? "vert";
+  const fa = st.featureAlign;
   const toggle = (key: "showVisual" | "showCollision" | "showFrames" | "showAxes" | "xray" | "wireframe") => useStore.setState({ [key]: !st[key] });
   return (
     <div className="vp-header">
@@ -43,6 +51,24 @@ export function ViewportHeader() {
             </button>
           </div>
         </>
+      ) : fa ? (
+        <>
+          <div className="seg">
+            <span className="dim" style={{ padding: "0 6px" }}>
+              特征对齐
+            </span>
+            {ALIGN_OPTS.map((o) => (
+              <button key={o.id} className={fa.constraint === o.id ? "active" : ""} onClick={() => setFeatureAlignConstraint(o.id)} title={o.label}>
+                {o.label}
+              </button>
+            ))}
+          </div>
+          <div className="seg">
+            <button onClick={() => cancelFeatureAlign()} title="Esc">
+              取消
+            </button>
+          </div>
+        </>
       ) : (
         <>
           <div className="seg">
@@ -51,6 +77,11 @@ export function ViewportHeader() {
                 {g === "translate" ? "移动" : g === "rotate" ? "旋转" : "无"}
               </button>
             ))}
+          </div>
+          <div className="seg">
+            <button title="特征对齐 (Shift+Alt+A)" onClick={() => beginFeatureAlign({})}>
+              特征对齐
+            </button>
           </div>
           <div className="seg">
             <button className={st.showVisual ? "active" : ""} onClick={() => toggle("showVisual")}>

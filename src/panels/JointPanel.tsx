@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { effectiveJointValues, initialJointValues } from "../state/actions";
+import { effectiveJointValues, initialJointValues, setJointZero } from "../state/actions";
 import { useStore } from "../state/store";
 import { resetSimulation } from "../sim/simulation";
 import { isMovable, jointRange } from "../types/urdf";
@@ -50,8 +50,18 @@ export function JointPanel() {
           onClick={() => {
             useStore.setState({ playing: false, jointValues: initialJointValues(robot, {}) });
           }}
+          title="把所有滑块值重置为默认零位（不改 URDF）"
         >
-          归零
+          滑块归零
+        </button>
+        <button
+          title="把选中关节的当前位置写入 URDF 为零点"
+          disabled={!(selection?.kind === "joint" && robot.joints.some((j) => j.name === selection.name && isMovable(j) && !j.mimic))}
+          onClick={() => {
+            if (selection?.kind === "joint") setJointZero(selection.name);
+          }}
+        >
+          设为零点
         </button>
         <label className="speed">
           速度

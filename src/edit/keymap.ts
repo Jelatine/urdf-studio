@@ -54,6 +54,7 @@ export const bindings: Binding[] = [
   b("KeyG", "obj.move", "object"),
   b("KeyR", "obj.rotate", "object"),
   b("Escape", "obj.gizmoOff", "object"),
+  b("KeyA", "obj.featureAlign", "object", { shift: true, alt: true }),
   b("Space", "sim.play", "object"),
   b("KeyF", "view.selected", "object"),
   b("KeyF", "obj.fit", "object", { shift: true, alt: true }),
@@ -139,8 +140,8 @@ export function installKeymap(): () => void {
     const st = store.getState();
     if (st.menu || st.dialog || st.confirm) return; // handled by the open menu/dialog
     const eng = getEngine();
-    if (eng?.modal) {
-      if (eng.handleModalKey(e)) e.preventDefault();
+    if (eng?.modal || st.featureAlign) {
+      if (eng?.handleModalKey(e)) e.preventDefault();
       return;
     }
     // Numpad orbit steps.
