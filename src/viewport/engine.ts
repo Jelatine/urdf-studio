@@ -19,7 +19,7 @@ import {
   pushFeaturePick,
   updateJoint,
 } from "../state/actions";
-import { store, type ParamSpec } from "../state/store";
+import { store, type FeaturePick, type ParamSpec } from "../state/store";
 import { stepSimulation } from "../sim/simulation";
 import type { Command } from "../wasm";
 import { EditOverlay } from "./editOverlay";
@@ -135,6 +135,8 @@ export class Engine {
   private fitPreview: THREE.Group | null = null;
   /** World-space helpers for feature-align picks. */
   private featureOverlay = new THREE.Group();
+  /** Hover preview while picking features (link-local, same as committed picks). */
+  private hoverFeature: FeaturePick | null = null;
   readonly raycaster = new THREE.Raycaster();
   readonly cursor3d = new THREE.Group();
   private grid: THREE.Group;
@@ -525,32 +527,69 @@ export class Engine {
     }
   }
 
+  private featurePickKey(p: FeaturePick | null): string {
+    if (!p) return "";
+    return `${p.link}|${p.kind}|${p.label}|${p.origin.map((v) => v.toFixed(5)).join(",")}|${p.direction.map((v) => v.toFixed(5)).join(",")}`;
+  }
+
+  private addFeatureVisual(pick: FeaturePick, color: number, len: number) {
+    const world = featureInWorld(pick);
+    if (!world) return;
+    const { a, b, c } = featureEndpoints(world, len);
+    if (world.kind === "point" || world.kind === "circle") {
+      const dot = new THREE.Mesh(
+        new THREE.SphereGeometry(len * 0.12, 12, 8),
+        new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.95 }),
+      );
+      dot.position.copy(c);
+      dot.renderOrder = 40;
+      this.featureOverlay.add(dot);
+    }
+    if (world.kind === "line" || world.kind === "circle") {
+      const geo = new THREE.BufferGeometry().setFromPoints([a, b]);
+      const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.95 }));
+      line.renderOrder = 40;
+      this.featureOverlay.add(line);
+    }
+  }
+
   private updateFeatureOverlay() {
     this.clearFeatureOverlay();
     const fa = s().featureAlign;
-    if (!fa) return;
+    if (!fa) {
+      this.hoverFeature = null;
+      return;
+    }
     const len = Math.max(0.04, this.robotView.helperSize * 1.2);
-    fa.picks.forEach((localPick, i) => {
-      const pick = featureInWorld(localPick);
-      if (!pick) return;
-      const color = i === 0 ? 0xff6b3d : 0x3dbbff;
-      const { a, b, c } = featureEndpoints(pick, len);
-      if (pick.kind === "point" || pick.kind === "circle") {
-        const dot = new THREE.Mesh(
-          new THREE.SphereGeometry(len * 0.12, 12, 8),
-          new THREE.MeshBasicMaterial({ color, depthTest: false }),
-        );
-        dot.position.copy(c);
-        dot.renderOrder = 40;
-        this.featureOverlay.add(dot);
+    fa.picks.forEach((localPick, i) => this.addFeatureVisual(localPick, i === 0 ? 0xff6b3d : 0x3dbbff, len));
+    if (this.hoverFeature && !featureAlignReady(fa)) this.addFeatureVisual(this.hoverFeature, 0xffe066, len * 1.05);
+  }
+
+  private updateFeatureHover(x: number, y: number) {
+    const fa = s().featureAlign;
+    if (!fa || featureAlignReady(fa)) {
+      if (this.hoverFeature) {
+        this.hoverFeature = null;
+        this.updateFeatureOverlay();
       }
-      if (pick.kind === "line" || pick.kind === "circle") {
-        const geo = new THREE.BufferGeometry().setFromPoints([a, b]);
-        const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color, depthTest: false }));
-        line.renderOrder = 40;
-        this.featureOverlay.add(line);
-      }
+      return;
+    }
+    if (this.needsRebuild) this.rebuildRobot();
+    const kind = nextFeatureKind(fa.constraint, fa.picks.length);
+    const pick = pickFeatureAt({
+      camera: this.camera,
+      width: this.container.clientWidth,
+      height: this.container.clientHeight,
+      x,
+      y,
+      geoms: this.robotView.geoms,
+      raycaster: this.raycaster,
+      ndc: this.ndc(x, y),
+      kind,
     });
+    if (this.featurePickKey(pick) === this.featurePickKey(this.hoverFeature)) return;
+    this.hoverFeature = pick;
+    this.updateFeatureOverlay();
   }
 
   private featureAlignClick(x: number, y: number) {
@@ -573,6 +612,7 @@ export class Engine {
       s().setStatus(`未拾取到${kind === "circle" ? "圆心" : kind === "point" ? "点" : "直线"}，请再试`, "error");
       return;
     }
+    this.hoverFeature = null;
     pushFeaturePick(pick);
   }
 
@@ -1013,6 +1053,7 @@ export class Engine {
       }
     }
     if (this.modal?.kind === "box" && (this.modal as BoxModal).dragging) this.drawBox(this.modal.x0, this.modal.y0, x, y);
+    else if (!d && !this.modal && s().featureAlign) this.updateFeatureHover(x, y);
   };
 
   private onPointerUp = (e: PointerEvent) => {
