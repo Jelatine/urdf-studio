@@ -1,6 +1,6 @@
 import { runCmd } from "../edit/meshOps";
 import { runOp } from "../edit/operators";
-import { applyFeatureAlign, beginFeatureAlign, featureAlignReady, cancelFeatureAlign, enterEditMode, exitEditMode, setFeatureAlignConstraint } from "../state/actions";
+import { applyFeatureAlign, featureAlignReady, cancelFeatureAlign, enterEditMode, exitEditMode, setFeatureAlignConstraint } from "../state/actions";
 import { useStore, type FeatureConstraint } from "../state/store";
 
 const ALIGN_OPTS: { id: FeatureConstraint; label: string }[] = [
@@ -80,11 +80,6 @@ export function ViewportHeader() {
                 {g === "translate" ? "移动" : g === "rotate" ? "旋转" : "无"}
               </button>
             ))}
-          </div>
-          <div className="seg">
-            <button title="特征对齐 (Shift+Alt+A)" onClick={() => beginFeatureAlign({})}>
-              特征对齐
-            </button>
           </div>
           <div className="seg">
             <button className={st.showVisual ? "active" : ""} onClick={() => toggle("showVisual")}>
