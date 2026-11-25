@@ -157,13 +157,14 @@ export class Engine {
   private framedOnce = false;
 
   constructor(readonly container: HTMLElement) {
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false });
     current = this;
     if (import.meta.env.DEV) (window as unknown as { __engine: Engine }).__engine = this;
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.setClearColor(0x2b2d31);
+    this.renderer.setClearColor(0x1c2532);
     container.appendChild(this.renderer.domElement);
     this.renderer.domElement.tabIndex = 0;
+    this.renderer.domElement.setAttribute("aria-label", "三维模型视口");
 
     this.perspCam = new THREE.PerspectiveCamera(45, 1, 0.005, 500);
     this.orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, -500, 500);
@@ -251,7 +252,7 @@ export class Engine {
 
   private makeGrid() {
     const g = new THREE.Group();
-    const grid = new THREE.GridHelper(10, 100, 0x45474c, 0x37393d);
+    const grid = new THREE.GridHelper(10, 100, 0x45566b, 0x303e50);
     grid.rotation.x = Math.PI / 2;
     g.add(grid);
     const axis = (to: THREE.Vector3, color: number) => {
@@ -631,7 +632,7 @@ export class Engine {
   setOrtho(ortho: boolean) {
     const from = this.camera;
     const target = this.controls.target;
-    if (ortho === from instanceof THREE.OrthographicCamera) return;
+    if (ortho === (from instanceof THREE.OrthographicCamera)) return;
     if (ortho) {
       const d = this.perspCam.position.distanceTo(target);
       this.orthoCam.userData.height = 2 * d * Math.tan(THREE.MathUtils.degToRad(this.perspCam.fov) / 2);
@@ -651,6 +652,27 @@ export class Engine {
     this.controls.object = this.camera;
     this.gizmo.camera = this.camera;
     this.controls.update();
+    this.controls.dispatchEvent({ type: "change" });
+  }
+
+  get gridVisible() {
+    return this.grid.visible;
+  }
+
+  setGridVisible(visible: boolean) {
+    this.grid.visible = visible;
+  }
+
+  zoom(inward: boolean) {
+    if (inward) this.controls.dollyIn(0.82);
+    else this.controls.dollyOut(0.82);
+  }
+
+  setViewDirection(direction: THREE.Vector3) {
+    const target = this.controls.target;
+    const distance = this.camera.position.distanceTo(target);
+    this.camera.position.copy(target).addScaledVector(direction.normalize(), distance);
+    this.controls.update();
   }
 
   toggleOrtho() {
@@ -663,16 +685,21 @@ export class Engine {
     const radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 0.01);
     const dirv = new THREE.Vector3().subVectors(this.camera.position, this.controls.target).normalize();
     if (dirv.lengthSq() < 0.5) dirv.set(0.6, -0.8, 0.5).normalize();
-    const d = radius / Math.sin(THREE.MathUtils.degToRad(this.perspCam.fov) / 2);
+    const halfVerticalFov = THREE.MathUtils.degToRad(this.perspCam.fov) / 2;
+    const halfHorizontalFov = Math.atan(Math.tan(halfVerticalFov) * this.perspCam.aspect);
+    const d = radius / Math.sin(Math.min(halfVerticalFov, halfHorizontalFov));
     this.controls.target.copy(center);
     this.camera.position.copy(center).addScaledVector(dirv, d * 1.1);
     if (this.camera instanceof THREE.OrthographicCamera) {
-      this.orthoCam.userData.height = radius * 2.4;
+      this.orthoCam.userData.height = radius * 2.4 / Math.min(1, this.perspCam.aspect);
       this.orthoCam.zoom = 1;
       this.updateOrthoFrustum();
     }
     this.perspCam.near = Math.max(radius / 1000, 1e-4);
-    this.perspCam.far = Math.max(radius * 200, 50);
+    this.perspCam.far = Math.max(radius * 200, d + radius * 2, 50);
+    this.orthoCam.far = this.perspCam.far;
+    this.orthoCam.near = -this.orthoCam.far;
+    this.orthoCam.updateProjectionMatrix();
     this.perspCam.updateProjectionMatrix();
     this.controls.update();
   }
@@ -710,25 +737,16 @@ export class Engine {
 
   /** Axis-aligned views (Numpad 1/3/7 and Ctrl variants). */
   setView(view: "front" | "back" | "right" | "left" | "top" | "bottom") {
-    const t = this.controls.target;
-    const d = this.camera.position.distanceTo(t);
-    const dirs: Record<string, [number, number, number]> = {
+    const dirs = {
       front: [0, -1, 0],
       back: [0, 1, 0],
       right: [1, 0, 0],
       left: [-1, 0, 0],
-      top: [0, 0, 1],
-      bottom: [0, 0, -1],
+      // A small offset keeps the Z-up camera stable at the poles.
+      top: [0, -1e-4, 1],
+      bottom: [0, -1e-4, -1],
     };
-    const v = new THREE.Vector3(...dirs[view]);
-    this.camera.position.copy(t).addScaledVector(v, d);
-    this.camera.up.set(0, 0, 1);
-    if (view === "top" || view === "bottom") {
-      // Avoid the degenerate up vector; keep +Y pointing up on screen.
-      this.camera.position.y -= d * 1e-4;
-    }
-    this.camera.lookAt(t);
-    this.controls.update();
+    this.setViewDirection(new THREE.Vector3(...dirs[view]));
   }
 
   /** Numpad 2/4/6/8 orbit steps. */
@@ -973,7 +991,7 @@ export class Engine {
     // Emulate 3-button mouse: Alt+left drag orbits, Alt+Shift+left pans
     // (a click without moving still does loop select in edit mode).
     if (e.button === 0 && e.altKey && !this.modal) {
-      this.controls.mouseButtons.LEFT = e.shiftKey && !s().editTarget ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
+      this.controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
     } else {
       this.controls.mouseButtons.LEFT = null as unknown as THREE.MOUSE;
     }
@@ -1060,6 +1078,8 @@ export class Engine {
     const r = this.renderer.domElement.getBoundingClientRect();
     const x = e.clientX - r.left;
     const y = e.clientY - r.top;
+    const d = this.down;
+    this.down = null;
     const m = this.modal;
     if (m?.kind === "box" && m.dragging) {
       this.applyBox(m, x, y);
@@ -1073,8 +1093,6 @@ export class Engine {
       this.applyBisect(m.x0!, m.y0!, x, y);
       return;
     }
-    const d = this.down;
-    this.down = null;
     if (!d || d.moved || m) return;
     if (e.target !== this.renderer.domElement) return;
     if (d.button === 2 && this.overlay && !d.shift) {

@@ -3,14 +3,7 @@ import { addChildLink, deleteSelection, reparent, switchUrdf } from "../state/ac
 import { useStore } from "../state/store";
 import { childrenMap, rootLinks, type Joint, type Robot } from "../types/urdf";
 
-const JOINT_ICON: Record<string, string> = {
-  revolute: "⟳",
-  continuous: "∞",
-  prismatic: "⇕",
-  fixed: "◆",
-  floating: "✥",
-  planar: "▱",
-};
+import { Icon } from "./Icon";
 
 interface TreeNode {
   name: string;
@@ -66,7 +59,7 @@ function LinkNode(props: { node: TreeNode; depth: number }) {
         <span className="twisty" onClick={(e) => (e.stopPropagation(), setOpen(!open))}>
           {joints.length ? (open ? "▾" : "▸") : " "}
         </span>
-        <span className="icon link-icon">▣</span>
+        <span className="icon link-icon"><Icon name="cube" /></span>
         <span className={err ? "has-error" : ""}>{name}</span>
       </div>
       {open &&
@@ -78,7 +71,7 @@ function LinkNode(props: { node: TreeNode; depth: number }) {
               onClick={() => useStore.setState({ selection: { kind: "joint", name: j.name } })}
               title={`${j.joint_type}: ${j.parent} → ${j.child}`}
             >
-              <span className="icon joint-icon">{JOINT_ICON[j.joint_type]}</span>
+              <span className="icon joint-icon"><Icon name="joint" /></span>
               <span className={issues.some((i) => i.target === j.name && i.level === "error") ? "has-error" : ""}>{j.name}</span>
               <span className="tree-meta">{j.joint_type}</span>
             </div>
@@ -101,13 +94,13 @@ export function Outliner() {
   return (
     <div className="outliner">
       <div className="panel-title">
-        结构 <span className="dim">{robot.name}</span>
+        <span className="dim">{robot.links.length} 个连杆 · {robot.joints.length} 个关节</span>
         <span className="panel-actions">
-          <button className="icon-btn" title="添加子 link (Shift+A)" onClick={() => addChildLink()}>
-            ＋
+          <button className="icon-btn" aria-label="添加子连杆" title="添加子 link (Shift+A)" onClick={() => addChildLink()}>
+            <Icon name="plus" />
           </button>
-          <button className="icon-btn" title="删除所选 link 及其子树 (X)" onClick={deleteSelection}>
-            🗑
+          <button className="icon-btn" aria-label="删除所选" title="删除所选 link 及其子树 (X)" onClick={deleteSelection}>
+            <Icon name="trash" />
           </button>
         </span>
       </div>
@@ -127,7 +120,7 @@ export function Outliner() {
           className={`tree-row ${selection === null ? "selected" : ""}`}
           onClick={() => useStore.setState({ selection: null })}
         >
-          <span className="icon">🤖</span>
+          <span className="icon"><Icon name="robot" /></span>
           <span>{robot.name}</span>
         </div>
         {tree.map((n) => (

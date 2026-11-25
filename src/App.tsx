@@ -1,9 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { installKeymap } from "./edit/keymap";
 import { runOp } from "./edit/operators";
 import { backend } from "./io/project";
 import { appWindow } from "./io/window";
 import { Dialogs } from "./panels/Dialogs";
+import { Icon } from "./panels/Icon";
 import { Inspector } from "./panels/Inspector";
 import { JointPanel } from "./panels/JointPanel";
 import { PopupMenu } from "./panels/PopupMenu";
@@ -17,6 +18,9 @@ import { Viewport } from "./viewport/Viewport";
 export default function App() {
   const robot = useStore((s) => s.robot);
   const busy = useStore((s) => s.busy);
+
+  const [structure, setStructure] = useState(() => !window.matchMedia("(max-width: 720px)").matches);
+  const [properties, setProperties] = useState(() => !window.matchMedia("(max-width: 720px)").matches);
 
   useEffect(() => installKeymap(), []);
 
@@ -96,33 +100,51 @@ export default function App() {
     <div className="app">
       <TitleBar />
       <div className="main">
-        <aside className="side left">
-          <Outliner />
+        <aside className={`side left ${structure ? "" : "side-collapsed"}`} aria-label="模型结构">
+          <header className="workspace-heading">
+            <button className="workspace-toggle" aria-label="模型结构" aria-expanded={structure} aria-controls="structure-panel" onClick={() => {
+              if (!structure && window.matchMedia("(max-width: 720px)").matches) setProperties(false);
+              setStructure(!structure);
+            }}>
+              <Icon name="tree" />{structure && <span>模型结构</span>}
+            </button>
+          </header>
+          <div id="structure-panel" className="workspace-body" hidden={!structure}><Outliner /></div>
         </aside>
         <section className="center">
-          <Viewport />
-          {!robot && (
-            <div className="welcome">
-              <h1>URDF Studio</h1>
-              <p>URDF 机器人模型编辑器 · Blender 风格网格编辑</p>
-              <div className="welcome-actions">
-                <button className="primary" onClick={() => runOp("file.open")}>
-                  打开 URDF / ZIP
-                </button>
-                <button onClick={() => runOp("file.new")}>新建机器人</button>
-                {!backend.native && (
-                  <button onClick={() => void backend.openPath("examples/demo_arm.zip").then(openProject)}>
-                    加载示例机械臂
+          <Viewport>
+            {!robot && (
+              <div className="welcome">
+                <div className="welcome-mark"><Icon name="robot" /></div>
+                <h1>URDF Studio</h1>
+                <p>URDF 机器人模型编辑器 · Blender 风格网格编辑</p>
+                <div className="welcome-actions">
+                  <button className="primary" onClick={() => runOp("file.open")}>
+                    <Icon name="folder" /> 打开 URDF / ZIP
                   </button>
-                )}
+                  <button onClick={() => runOp("file.new")}><Icon name="plus" /> 新建机器人</button>
+                  {!backend.native && (
+                    <button onClick={() => void backend.openPath("examples/demo_arm.zip").then(openProject)}>
+                      加载示例机械臂
+                    </button>
+                  )}
+                </div>
+                <p className="hint">也可以把 .urdf / .zip 文件拖到窗口中 · 按 F1 查看快捷键</p>
               </div>
-              <p className="hint">也可以把 .urdf / .zip 文件拖到窗口中 · 按 F1 查看快捷键</p>
-            </div>
-          )}
+            )}
+          </Viewport>
           <JointPanel />
         </section>
-        <aside className="side right">
-          <Inspector />
+        <aside className={`side right ${properties ? "" : "side-collapsed"}`} aria-label="属性编辑">
+          <header className="workspace-heading">
+            <button className="workspace-toggle" aria-label="属性编辑" aria-expanded={properties} aria-controls="properties-panel" onClick={() => {
+              if (!properties && window.matchMedia("(max-width: 720px)").matches) setStructure(false);
+              setProperties(!properties);
+            }}>
+              <Icon name="properties" />{properties && <span>属性编辑</span>}
+            </button>
+          </header>
+          <div id="properties-panel" className="workspace-body" hidden={!properties}><Inspector /></div>
         </aside>
       </div>
       <StatusBar />

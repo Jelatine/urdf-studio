@@ -133,13 +133,16 @@ export function matchBinding(e: KeyboardEvent, mode: "edit" | "object"): Binding
 
 export function installKeymap(): () => void {
   const down = (e: KeyboardEvent) => {
+    const control = e.target instanceof HTMLElement && e.target.closest("button, summary");
+    if (control && ["Space", "Enter", "Tab"].includes(e.code)) return;
+    const eng = getEngine();
+    if (e.code === "Tab" && e.target !== eng?.renderer.domElement) return;
     if (isTyping(e)) {
       if (e.key === "Escape") (e.target as HTMLElement).blur();
       return;
     }
     const st = store.getState();
     if (st.menu || st.dialog || st.confirm) return; // handled by the open menu/dialog
-    const eng = getEngine();
     if (eng?.modal || st.featureAlign) {
       if (eng?.handleModalKey(e)) e.preventDefault();
       return;

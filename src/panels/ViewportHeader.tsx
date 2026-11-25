@@ -1,5 +1,6 @@
 import { runCmd } from "../edit/meshOps";
-import { runOp } from "../edit/operators";
+import { useShallow } from "zustand/react/shallow";
+import { Icon } from "./Icon";
 import { applyFeatureAlign, featureAlignReady, cancelFeatureAlign, enterEditMode, exitEditMode, setFeatureAlignConstraint } from "../state/actions";
 import { useStore, type FeatureConstraint } from "../state/store";
 
@@ -11,19 +12,21 @@ const ALIGN_OPTS: { id: FeatureConstraint; label: string }[] = [
 ];
 
 export function ViewportHeader() {
-  const st = useStore();
+  const st = useStore(useShallow((s) => ({
+    robot: s.robot, mode: s.mode, selectionMode: s.meshStats?.mode, featureAlign: s.featureAlign,
+    proportional: s.proportional, gizmo: s.gizmo,
+  })));
   const robot = st.robot;
   if (!robot) return null;
-  const smode = st.meshStats?.mode ?? "vert";
+  const smode = st.selectionMode ?? "vert";
   const fa = st.featureAlign;
-  const toggle = (key: "showVisual" | "showCollision" | "showFrames" | "showAxes" | "xray" | "wireframe") => useStore.setState({ [key]: !st[key] });
   return (
     <div className="vp-header">
       <div className="seg">
-        <button className={st.mode === "object" ? "active" : ""} onClick={() => st.mode === "edit" && exitEditMode()} title="对象模式 (Tab)">
+        <button className={st.mode === "object" ? "active" : ""} onClick={() => st.mode === "edit" && exitEditMode()} aria-pressed={st.mode === "object"} title="对象模式 (Tab)">
           对象
         </button>
-        <button className={st.mode === "edit" ? "active" : ""} onClick={() => st.mode === "object" && enterEditMode()} title="编辑模式 (Tab)">
+        <button className={st.mode === "edit" ? "active" : ""} onClick={() => st.mode === "object" && enterEditMode()} aria-pressed={st.mode === "edit"} title="编辑模式 (Tab)">
           编辑
         </button>
       </div>
@@ -34,6 +37,7 @@ export function ViewportHeader() {
               <button
                 key={m}
                 className={smode === m ? "active" : ""}
+                aria-pressed={smode === m}
                 title={`${["顶点", "边", "面"][i]}选择模式 (${i + 1})`}
                 onClick={() => runCmd({ op: "set_select_mode", mode: m }, { label: "选择模式", noAdjust: true })}
               >
@@ -44,10 +48,11 @@ export function ViewportHeader() {
           <div className="seg">
             <button
               className={st.proportional.enabled ? "active" : ""}
+              aria-pressed={st.proportional.enabled}
               title="比例编辑 (O)"
               onClick={() => useStore.setState({ proportional: { ...st.proportional, enabled: !st.proportional.enabled } })}
             >
-              ◎ 比例编辑
+              <Icon name="circle" /> 比例编辑
             </button>
           </div>
         </>
@@ -73,59 +78,14 @@ export function ViewportHeader() {
           </div>
         </>
       ) : (
-        <>
-          <div className="seg">
-            {(["translate", "rotate", "none"] as const).map((g) => (
-              <button key={g} className={st.gizmo === g ? "active" : ""} onClick={() => useStore.setState({ gizmo: g })} title="关节原点操纵器 (G / R / Esc)">
-                {g === "translate" ? "移动" : g === "rotate" ? "旋转" : "无"}
-              </button>
-            ))}
-          </div>
-          <div className="seg">
-            <button className={st.showVisual ? "active" : ""} onClick={() => toggle("showVisual")}>
-              外观
+        <div className="seg" role="group" aria-label="关节原点操纵器">
+          {(["translate", "rotate", "none"] as const).map((g) => (
+            <button key={g} className={st.gizmo === g ? "active" : ""} aria-pressed={st.gizmo === g} onClick={() => useStore.setState({ gizmo: g })} title="关节原点操纵器 (G / R / Esc)">
+              {g === "translate" ? <><Icon name="move" /> 移动</> : g === "rotate" ? <><Icon name="rotate" /> 旋转</> : "隐藏操纵器"}
             </button>
-            <button className={st.showCollision ? "active" : ""} onClick={() => toggle("showCollision")}>
-              碰撞
-            </button>
-            <button className={st.showFrames ? "active" : ""} onClick={() => toggle("showFrames")} title="显示 link 坐标系">
-              坐标系
-            </button>
-            <button className={st.showAxes ? "active" : ""} onClick={() => toggle("showAxes")} title="显示关节轴">
-              关节轴
-            </button>
-          </div>
-        </>
+          ))}
+        </div>
       )}
-      <span className="spacer" />
-      <div className="seg">
-        <button className={st.xray ? "active" : ""} onClick={() => toggle("xray")} title="X-Ray 透视 (Alt+Z)">
-          X-Ray
-        </button>
-        <button className={st.wireframe ? "active" : ""} onClick={() => toggle("wireframe")} title="线框 (Shift+Z)">
-          线框
-        </button>
-      </div>
-      <div className="seg">
-        <button onClick={() => runOp("view.front")} title="前视图 (Numpad 1)">
-          前
-        </button>
-        <button onClick={() => runOp("view.right")} title="右视图 (Numpad 3)">
-          右
-        </button>
-        <button onClick={() => runOp("view.top")} title="顶视图 (Numpad 7)">
-          顶
-        </button>
-        <button onClick={() => runOp("view.ortho")} title="透视/正交 (Numpad 5)">
-          正交
-        </button>
-        <button onClick={() => runOp("view.selected")} title="查看所选 (Numpad .)">
-          聚焦
-        </button>
-        <button onClick={() => runOp("view.all")} title="查看全部 (Home)">
-          全部
-        </button>
-      </div>
     </div>
   );
 }

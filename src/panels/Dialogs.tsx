@@ -100,7 +100,7 @@ function HelpDialog() {
   return (
     <Modal title="快捷键" wide>
       <div className="help-intro">
-        <b>导航:</b> 中键拖动旋转 · Shift+中键 / 右键拖动平移 · 滚轮缩放 · Alt+左键拖动旋转 (触控板) · Shift+右键 放置 3D 游标
+        <b>导航:</b> 中键拖动旋转 · Shift+中键 / 右键拖动平移 · 滚轮缩放 · Alt+左键拖动旋转 · Alt+Shift+左键拖动平移 · Shift+右键 放置 3D 游标 · 聚焦视口后按 Tab 切换编辑模式
         <br />
         <b>编辑模式选择:</b> 单击选择 · Shift+单击 加选/切换 · Ctrl+单击 最短路径 · Alt+单击 循环边 · Ctrl+Alt+单击 环形边 · 左键拖动 框选 (Shift 加选, Ctrl 减选)
         <br />
