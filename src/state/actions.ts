@@ -659,7 +659,7 @@ export function pushFeaturePick(pick: FeaturePick) {
 }
 
 export function applyFeatureAlign() {
-  const { featureAlign: fa, robot } = s();
+  const { featureAlign: fa, robot, jointValues, keyframes } = s();
   if (!fa || !robot) return;
   if (!featureAlignReady(fa)) {
     s().setStatus(featureAlignHint(fa), "error");
@@ -677,16 +677,36 @@ export function applyFeatureAlign() {
       return;
     }
   }
-  const ok = applyFeatureConstraint(fa, remapJointAxisDir);
-  if (ok) {
-    const robot = s().robot!;
+  // Bake alignment into URDF origin at q=0: after the geometric edit, fold the
+  // current joint value so the constraint holds in the model zero pose (not only
+  // while the runtime angle happens to match).
+  const q = jointValues[fa.joint] ?? 0;
+  const result = applyFeatureConstraint(fa, remapJointAxisDir, (r, j) => {
+    if (Math.abs(q) > 1e-12) rebaseJoint(r, j, q);
+  });
+  if (!result.ok) return;
+  if (result.kind === "origin") {
+    const nextValues = { ...jointValues, [fa.joint]: 0 };
+    const nextFrames =
+      Math.abs(q) > 1e-12
+        ? keyframes.map((kf) => {
+            const copy = { ...kf };
+            if (fa.joint in copy) copy[fa.joint] = (copy[fa.joint] ?? 0) - q;
+            return copy;
+          })
+        : keyframes;
     store.setState({
       featureAlign: null,
       modalHint: null,
-      jointValues: initialJointValues(robot, s().jointValues),
+      playing: false,
+      jointValues: initialJointValues(s().robot!, nextValues),
+      keyframes: nextFrames,
     });
-    s().setStatus(`已应用特征对齐 (${fa.constraint}) 到 ${fa.joint}`, "ok");
+  } else {
+    // axisAlign already folded q / cleared the slider via remapJointAxisDir.
+    store.setState({ featureAlign: null, modalHint: null });
   }
+  s().setStatus(`已应用特征对齐 (${fa.constraint}) 到 ${fa.joint}`, "ok");
 }
 
 // ---------------------------------------------------------- mesh geometry

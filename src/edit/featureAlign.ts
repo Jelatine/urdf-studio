@@ -4,7 +4,7 @@ import * as THREE from "three";
 import { axisInParent, poseToMatrix, rotateOriginAlign, translateOrigin } from "../math/jointPose";
 import type { FeatureAlignState, FeaturePick } from "../state/store";
 import { store } from "../state/store";
-import type { Joint, Robot } from "../types/urdf";
+import type { Joint, Pose, Robot } from "../types/urdf";
 import { getEngine } from "../viewport/engine";
 
 function parentWorldMatrix(joint: Joint): THREE.Matrix4 {
@@ -17,9 +17,14 @@ function parentWorldMatrix(joint: Joint): THREE.Matrix4 {
   return new THREE.Matrix4();
 }
 
+/** Map a world-space direction into the joint's parent link frame. */
 function worldDirToParent(joint: Joint, d: THREE.Vector3): THREE.Vector3 {
-  const n = new THREE.Matrix3().getNormalMatrix(parentWorldMatrix(joint).invert());
-  return d.clone().applyMatrix3(n).normalize();
+  return d.clone().transformDirection(parentWorldMatrix(joint).invert()).normalize();
+}
+
+/** Map a world-space displacement into the joint's parent link frame. */
+function worldDeltaToParent(joint: Joint, deltaW: THREE.Vector3): THREE.Vector3 {
+  return deltaW.clone().transformDirection(parentWorldMatrix(joint).invert());
 }
 
 function v3(a: [number, number, number]) {
@@ -31,128 +36,140 @@ function jointOriginWorld(joint: Joint): THREE.Matrix4 {
   return parentWorldMatrix(joint).multiply(poseToMatrix(joint.origin));
 }
 
+export type FeatureConstraintResult =
+  | { ok: false }
+  | { ok: true; kind: "axisAlign" }
+  | { ok: true; kind: "origin"; joint: string };
+
 /**
  * Apply the constraint described by `fa` onto the live robot.
- * Returns false when inputs are invalid.
+ * For origin constraints, `afterOrigin` runs in the same undo step after the
+ * geometric edit (used to fold the current joint value into URDF).
  */
 export function applyFeatureConstraint(
   fa: FeatureAlignState,
   remapAxis: (name: string, direction: THREE.Vector3) => boolean,
-): boolean {
+  afterOrigin: (robot: Robot, joint: Joint) => void,
+): FeatureConstraintResult {
   const st = store.getState();
   const robot = st.robot;
-  if (!robot) return false;
+  if (!robot) return { ok: false };
   const joint = robot.joints.find((j) => j.name === fa.joint);
   if (!joint) {
     st.setStatus(`找不到关节 ${fa.joint}`, "error");
-    return false;
+    return { ok: false };
   }
 
   const picks = fa.picks.map(featureInWorld);
   if (picks.some((pick) => pick === null)) {
     st.setStatus("找不到所选特征的 link", "error");
-    return false;
+    return { ok: false };
   }
   try {
     switch (fa.constraint) {
       case "axisAlign":
         return applyAxisAlign(joint, picks[0]!, remapAxis);
       case "parallel":
-        return applyParallel(robot, joint, picks[0]!, picks[1]!);
+        return applyParallel(joint, picks[0]!, picks[1]!, afterOrigin);
       case "collinear":
-        return applyCollinear(robot, joint, picks[0]!, picks[1]!);
+        return applyCollinear(joint, picks[0]!, picks[1]!, afterOrigin);
       case "concentric":
-        return applyConcentric(robot, joint, picks[0]!, picks[1]!);
+        return applyConcentric(joint, picks[0]!, picks[1]!, afterOrigin);
       default:
-        return false;
+        return { ok: false };
     }
   } catch (e) {
     st.setStatus(e instanceof Error ? e.message : String(e), "error");
-    return false;
+    return { ok: false };
   }
 }
 
-function commit(fn: (r: Robot) => void) {
-  store.getState().editRobot(fn, { snapJoints: true });
+function commitOrigin(
+  jointName: string,
+  nextOrigin: Pose,
+  afterOrigin: (robot: Robot, joint: Joint) => void,
+): FeatureConstraintResult {
+  store.getState().editRobot(
+    (r) => {
+      const j = r.joints.find((x) => x.name === jointName);
+      if (!j) return;
+      j.origin = nextOrigin;
+      afterOrigin(r, j);
+    },
+    { snapJoints: true },
+  );
+  return { ok: true, kind: "origin", joint: jointName };
 }
 
 function applyAxisAlign(
   joint: Joint,
   line: FeaturePick,
   remapAxis: (name: string, direction: THREE.Vector3) => boolean,
-): boolean {
+): FeatureConstraintResult {
   if (line.kind !== "line" && line.kind !== "circle") {
     store.getState().setStatus("轴对齐需要一条直线或圆轴", "error");
-    return false;
+    return { ok: false };
   }
   const dirParent = worldDirToParent(joint, v3(line.direction));
   if (dirParent.lengthSq() < 1e-12) {
     store.getState().setStatus("直线方向无效", "error");
-    return false;
+    return { ok: false };
   }
   // Prefer direction closer to current axis (avoid 180° flips).
   const cur = axisInParent(joint);
   if (cur.dot(dirParent) < 0) dirParent.negate();
-  return remapAxis(joint.name, dirParent);
+  return remapAxis(joint.name, dirParent) ? { ok: true, kind: "axisAlign" } : { ok: false };
 }
 
-function applyParallel(_robot: Robot, joint: Joint, moving: FeaturePick, reference: FeaturePick): boolean {
+function applyParallel(
+  joint: Joint,
+  moving: FeaturePick,
+  reference: FeaturePick,
+  afterOrigin: (robot: Robot, joint: Joint) => void,
+): FeatureConstraintResult {
   const dMove = v3(moving.direction);
   const dRef = v3(reference.direction);
   if (dMove.lengthSq() < 1e-12 || dRef.lengthSq() < 1e-12) {
     store.getState().setStatus("线平行需要两条有效直线", "error");
-    return false;
+    return { ok: false };
   }
   dMove.normalize();
   dRef.normalize();
-  // Rotate joint origin so the moving direction (rigidly attached in world at
-  // pick time via current FK) becomes parallel to reference. We approximate by
-  // rotating the joint frame's orientation in the parent by the same delta.
+  // Rotate joint origin so the moving direction (from current FK) becomes parallel
+  // to the reference. Child content is not compensated — it must move in world.
   const dMoveP = worldDirToParent(joint, dMove);
   const dRefP = worldDirToParent(joint, dRef);
   if (dMoveP.dot(dRefP) < 0) dRefP.negate();
-  // Do not compensate the child: the moving feature must rotate in world.
-  commit((r) => {
-    const j = r.joints.find((x) => x.name === joint.name);
-    if (!j) return;
-    j.origin = rotateOriginAlign(j.origin, dMoveP, dRefP);
-  });
-  return true;
+  return commitOrigin(joint.name, rotateOriginAlign(joint.origin, dMoveP, dRefP), afterOrigin);
 }
 
-function applyCollinear(_robot: Robot, joint: Joint, point: FeaturePick, line: FeaturePick): boolean {
+function applyCollinear(
+  joint: Joint,
+  point: FeaturePick,
+  line: FeaturePick,
+  afterOrigin: (robot: Robot, joint: Joint) => void,
+): FeatureConstraintResult {
   const pW = v3(point.origin);
   const l0 = v3(line.origin);
   const ld = v3(line.direction);
   if (ld.lengthSq() < 1e-12) {
     store.getState().setStatus("点共线需要有效参考直线", "error");
-    return false;
+    return { ok: false };
   }
   ld.normalize();
   const projected = l0.clone().addScaledVector(ld, pW.clone().sub(l0).dot(ld));
-  const deltaW = projected.sub(pW);
-  const Rp = new THREE.Matrix3().getNormalMatrix(parentWorldMatrix(joint).invert());
-  const deltaParent = deltaW.clone().applyMatrix3(Rp);
-  commit((r) => {
-    const j = r.joints.find((x) => x.name === joint.name);
-    if (!j) return;
-    j.origin = translateOrigin(j.origin, deltaParent);
-  });
-  return true;
+  const deltaParent = worldDeltaToParent(joint, projected.sub(pW));
+  return commitOrigin(joint.name, translateOrigin(joint.origin, deltaParent), afterOrigin);
 }
 
-function applyConcentric(_robot: Robot, joint: Joint, moving: FeaturePick, reference: FeaturePick): boolean {
-  const a = v3(moving.origin);
-  const b = v3(reference.origin);
-  const deltaW = b.clone().sub(a);
-  const Rp = new THREE.Matrix3().getNormalMatrix(parentWorldMatrix(joint).invert());
-  const deltaParent = deltaW.clone().applyMatrix3(Rp);
-  commit((r) => {
-    const j = r.joints.find((x) => x.name === joint.name);
-    if (!j) return;
-    j.origin = translateOrigin(j.origin, deltaParent);
-  });
-  return true;
+function applyConcentric(
+  joint: Joint,
+  moving: FeaturePick,
+  reference: FeaturePick,
+  afterOrigin: (robot: Robot, joint: Joint) => void,
+): FeatureConstraintResult {
+  const deltaParent = worldDeltaToParent(joint, v3(reference.origin).sub(v3(moving.origin)));
+  return commitOrigin(joint.name, translateOrigin(joint.origin, deltaParent), afterOrigin);
 }
 
 /** Resolve a link-local pick against the current robot pose. */
